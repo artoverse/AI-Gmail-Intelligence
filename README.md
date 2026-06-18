@@ -1,7 +1,7 @@
 # GmailAI — Intelligent Email Platform
 
 An AI-powered Gmail Intelligence Platform built with Next.js 16, Supabase (PostgreSQL + pgvector), Google Gmail API (OAuth 2.0), Llama 3.1 via NVIDIA NIM, and Google Gemini API.
-
+Live demo: https://ai-gmail-intelligence.onrender.com
 ## Features
 
 - **OAuth Gmail Integration** — Connect your Gmail via Google OAuth2 with full read/send access
