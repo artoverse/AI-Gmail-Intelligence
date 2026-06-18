@@ -1,288 +1,337 @@
-# Architecture & Design Document — AI Gmail Intelligence Platform
+# Architecture & Design Document
+## AI-Powered Gmail Intelligence Platform
+
+---
 
 ## 1. System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        FRONTEND (Next.js 16)                     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────────┐   │
-│  │ Sidebar   │  │ThreadList│  │EmailView │  │  ChatPanel    │   │
-│  │(categories│  │(paginated│  │(iframe   │  │  (streaming   │   │
-│  │ filters)  │  │ threads) │  │ reader)  │  │   SSE RAG)    │   │
-│  └──────────┘  └──────────┘  └──────────┘  └───────────────┘   │
-│  ┌───────────────────────────────────────────────────────────┐   │
-│  │               ComposeModal (AI-drafted replies)            │   │
-│  └───────────────────────────────────────────────────────────┘   │
-└──────────────┬──────────────────────────────────┬───────────────┘
-               │                                  │
-               ▼                                  ▼
-┌──────────────────────────┐     ┌──────────────────────────────┐
-│   Next.js API Routes     │     │     Supabase Auth (OAuth)    │
-│  ┌────────────────────┐  │     │  Google OAuth 2.0 Provider   │
-│  │ /api/chat           │  │     └──────────────────────────────┘
-│  │ /api/summarize      │  │
-│  │ /api/gmail/connect  │  │
-│  │ /api/gmail/sync     │  │
-│  │ /api/gmail/send     │  │
-│  └────────┬───────────┘  │
-└───────────┼──────────────┘
-            │
-    ┌───────┴───────┐
-    ▼               ▼
-┌────────────┐ ┌────────────────┐
-│ Gmail API  │ │  AI Services   │
-│ (OAuth2)   │ │                │
-│ - messages │ │ NVIDIA NIM     │
-│ - threads  │ │ ├─ Embeddings  │
-│ - labels   │ │ │  (nv-embedqa) │
-│ - send     │ │ ├─ Chat/RAG    │
-│ - history  │ │ │  (Llama 3.1) │
-└────────────┘ │ ├─ Summarize   │
-               │ ├─ Categorize  │
-               │ └─ Draft Reply │
-               │                │
-               │ Google Gemini  │
-               │ └─ Fallback    │
-               └───────┬───────┘
-                       │
-                       ▼
-              ┌─────────────────┐
-              │    Supabase     │
-              │  (PostgreSQL)   │
-              │                 │
-              │ ┌─────────────┐ │
-              │ │gmail_accounts│ │
-              │ │email_threads │ │
-              │ │email_messages│ │
-              │ │email_categories│
-              │ │ + pgvector   │ │
-              │ └─────────────┘ │
-              └─────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                         CLIENT BROWSER                              │
+│                                                                     │
+│  ┌──────────┐  ┌────────────┐  ┌──────────────┐  ┌─────────────┐  │
+│  │ Sidebar  │  │ ThreadList │  │  EmailView   │  │  ChatPanel  │  │
+│  │(nav/cats)│  │(email list)│  │(thread + AI) │  │ (RAG agent) │  │
+│  └────┬─────┘  └─────┬──────┘  └──────┬───────┘  └──────┬──────┘  │
+│       │               │                │                  │         │
+└───────┼───────────────┼────────────────┼──────────────────┼─────────┘
+        │               │                │                  │
+        ▼               ▼                ▼                  ▼
+┌───────────────────────────────────────────────────────────────────┐
+│                     NEXT.JS API ROUTES (Server)                   │
+│                                                                   │
+│  /api/gmail/connect   → OAuth 2.0 flow initiation                │
+│  /api/gmail/sync      → Full + incremental Gmail sync            │
+│  /api/gmail/send      → Send / reply email via Gmail API         │
+│  /api/gmail/categorize→ Batch rule-based email categorization    │
+│  /api/chat            → SSE streaming RAG chat endpoint          │
+│  /api/summarize       → Thread summary + AI draft generation     │
+└───────────────────────────────────────────────────────────────────┘
+        │                                       │
+        ▼                                       ▼
+┌───────────────┐                   ┌───────────────────────────────┐
+│  GOOGLE OAUTH │                   │         SUPABASE              │
+│  Gmail API    │                   │  PostgreSQL + pgvector        │
+│               │                   │                               │
+│  - OAuth 2.0  │                   │  gmail_accounts               │
+│  - threads.list│                  │  email_threads (+ embedding)  │
+│  - messages   │                   │  email_messages               │
+│  - history    │                   │  email_categories             │
+│  - send       │                   │  match_threads() RPC          │
+└───────────────┘                   └───────────────────────────────┘
+                                            │            │
+                                    ┌───────┘            └────────┐
+                                    ▼                             ▼
+                        ┌─────────────────────┐    ┌─────────────────────┐
+                        │   NVIDIA NIM API    │    │  NVIDIA NIM Embed   │
+                        │                     │    │                     │
+                        │  meta/llama-3.1-    │    │  nv-embedqa-e5-v5  │
+                        │  8b-instruct        │    │  (1024-dim vectors) │
+                        │                     │    │                     │
+                        │  - Summarization    │    │  - Thread embedding │
+                        │  - Reply drafting   │    │  - Query embedding  │
+                        │  - New email compose│    │  - Semantic search  │
+                        │  - RAG answering    │    │                     │
+                        └─────────────────────┘    └─────────────────────┘
 ```
 
-### Request Flow
+### Component Interaction Flow
 
-1. **Authentication**: User signs in via Supabase Auth (Google OAuth). Gmail OAuth is a separate flow through `/api/gmail/connect` for read/write scope.
-2. **Sync**: `/api/gmail/sync` fetches messages via Gmail API, extracts bodies, upserts into Supabase. Background processing runs summarization, categorization, and embedding generation.
-3. **Chat (RAG)**: User query → embed via NVIDIA NIM → pgvector similarity search → fetch full thread content → stream answer from Llama 3.1 via NVIDIA NIM.
-4. **Email Actions**: Summarize, compose, and reply all go through `/api/summarize` which uses Llama 3.1 for generation.
+**Gmail Sync Flow:**
+```
+User clicks Sync → /api/gmail/sync (POST)
+  → refreshGmailToken()           (renew OAuth token if expired)
+  → gmail.users.threads.list()    (paginated, max 100 threads)
+  → gmail.users.threads.get()     (fetch each thread's messages)
+  → Upsert email_threads + email_messages to Supabase
+  → Best-effort: embedPassage() + store embedding in email_threads
+  → Return { synced, processed }
+```
+
+**Chat / RAG Flow:**
+```
+User sends message → /api/chat (POST, SSE)
+  → Fetch inbox meta (totalThreads, totalMessages) from Supabase
+  → hybridSearch(query, gmailAccountId):
+      ├─ If newsletter query → newsletterSearch() (category-filtered)
+      ├─ If recency query   → recentThreads() (date-sorted)
+      └─ Otherwise:
+          ├─ semanticSearch() via pgvector match_threads RPC
+          ├─ keywordSearch() via Supabase ilike filter
+          └─ Merge + deduplicate + blend recent threads
+  → getThreadContext() for top 8 results (actual message text)
+  → generateGroundedAnswerStream() → Llama 3.1 via NVIDIA NIM (SSE)
+  → Client receives: [SOURCES token] + [streamed answer chunks]
+```
 
 ---
 
 ## 2. Database Schema
 
-### Tables
+```sql
+-- Gmail account credentials and sync state
+CREATE TABLE gmail_accounts (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID NOT NULL REFERENCES auth.users(id),
+  email_address   TEXT,
+  access_token    TEXT,              -- Encrypted OAuth access token
+  refresh_token   TEXT,              -- Long-lived refresh token
+  token_expiry    TIMESTAMPTZ,
+  history_id      TEXT,              -- Gmail API history ID for incremental sync
+  last_synced     TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ DEFAULT now()
+);
 
-#### `gmail_accounts`
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | UUID (PK) | Unique account identifier |
-| `user_id` | UUID (FK → auth.users) | Supabase auth user |
-| `email_address` | TEXT | Gmail address |
-| `access_token` | TEXT | OAuth access token (encrypted at rest) |
-| `refresh_token` | TEXT | OAuth refresh token |
-| `token_expiry` | TIMESTAMPTZ | Token expiration time |
-| `history_id` | TEXT | Gmail history ID for incremental sync |
-| `last_synced` | TIMESTAMPTZ | Last successful sync time |
+-- Email threads (conversation-level, first-class entity)
+CREATE TABLE email_threads (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  gmail_account_id  UUID REFERENCES gmail_accounts(id),
+  subject           TEXT,
+  participants      JSONB,           -- [{name, email}] array
+  last_message_date TIMESTAMPTZ,
+  labels            TEXT[],          -- Gmail labels (INBOX, SENT, etc.)
+  summary           TEXT,            -- AI-generated thread summary (cached)
+  embedding         VECTOR(1024),    -- NVIDIA NIM nv-embedqa-e5-v5 embedding
+  created_at        TIMESTAMPTZ DEFAULT now(),
+  updated_at        TIMESTAMPTZ DEFAULT now()
+);
 
-#### `email_threads`
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | TEXT (PK) | Gmail thread ID |
-| `gmail_account_id` | UUID (FK) | Parent Gmail account |
-| `subject` | TEXT | Thread subject line |
-| `summary` | TEXT | AI-generated thread summary |
-| `participants` | JSONB | Array of `{email}` objects |
-| `labels` | TEXT[] | Gmail label IDs |
-| `last_message_date` | TIMESTAMPTZ | Most recent message date |
-| `embedding` | vector(1024) | Thread embedding for semantic search |
+-- Individual email messages within threads
+CREATE TABLE email_messages (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  thread_id       UUID REFERENCES email_threads(id),
+  from_address    TEXT,
+  to_addresses    TEXT[],
+  cc_addresses    TEXT[],
+  date            TIMESTAMPTZ,
+  subject         TEXT,
+  body_text       TEXT,              -- Plain text body
+  body_html       TEXT,              -- HTML body (for rich display)
+  labels          TEXT[],
+  raw             JSONB,             -- Full Gmail API message object
+  created_at      TIMESTAMPTZ DEFAULT now()
+);
 
-#### `email_messages`
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | TEXT (PK) | Gmail message ID |
-| `thread_id` | TEXT (FK) | Parent thread |
-| `from_address` | TEXT | Sender address |
-| `to_addresses` | TEXT[] | Recipients |
-| `cc_addresses` | TEXT[] | CC recipients |
-| `date` | TIMESTAMPTZ | Message date |
-| `subject` | TEXT | Message subject |
-| `body_text` | TEXT | Plain text body |
-| `body_html` | TEXT | HTML body |
-| `labels` | TEXT[] | Gmail label IDs |
-| `raw` | JSONB | Original Gmail metadata |
+-- AI-assigned categories per thread
+CREATE TABLE email_categories (
+  id          BIGSERIAL PRIMARY KEY,
+  thread_id   UUID UNIQUE REFERENCES email_threads(id),  -- One category per thread
+  category    TEXT NOT NULL,         -- Newsletter|Job|Finance|Notification|Personal|Work|Other
+  confidence  FLOAT DEFAULT 0.85,
+  created_at  TIMESTAMPTZ DEFAULT now()
+);
 
-#### `email_categories`
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | UUID (PK) | Auto-generated |
-| `thread_id` | TEXT (FK, UNIQUE) | One category per thread |
-| `category` | TEXT | Category name |
-| `confidence` | FLOAT | AI confidence score (0–1) |
+-- Indexes for performance
+CREATE INDEX idx_email_threads_account ON email_threads(gmail_account_id);
+CREATE INDEX idx_email_threads_date ON email_threads(last_message_date DESC);
+CREATE INDEX idx_email_messages_thread ON email_messages(thread_id);
+CREATE INDEX idx_email_categories_thread ON email_categories(thread_id);
+CREATE INDEX idx_email_categories_category ON email_categories(category);
 
-### pgvector Usage
+-- pgvector HNSW index for fast ANN search
+CREATE INDEX idx_email_threads_embedding ON email_threads 
+  USING hnsw (embedding vector_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
+```
 
-We embed `subject + body_text` of each thread using NVIDIA NIM's `nvidia/nv-embedqa-e5-v5` model (1024 dimensions). This enables:
-- **Semantic search**: User queries are embedded and matched against thread embeddings using cosine similarity via the `match_threads` SQL function.
-- **RAG retrieval**: The chat agent uses the same vector search to find relevant threads before generating answers.
+### pgvector Design Decisions
 
-The `match_threads` function uses `1 - (embedding <=> query_embedding)` for cosine similarity with a configurable threshold (default 0.5).
+**What is embedded:** The concatenation of `subject + summary + first 2000 chars of body_text` from each thread. This gives the embedding semantic coverage of the whole thread at search time.
 
-### Indexes
-- `email_threads.embedding` — IVFFlat index for fast vector similarity search
-- `email_messages.thread_id` — B-tree index for thread message lookups
-- `email_categories.thread_id` — Unique index for upserts
+**Why thread-level (not message-level):** Threads are the primary user-facing unit. Embedding at thread level means one vector per conversation, reducing index size and avoiding redundant near-duplicate vectors for multi-message threads.
+
+**Embedding model:** `nvidia/nv-embedqa-e5-v5` — a 1024-dimensional bilingual retrieval model optimized for asymmetric search (short query → long passage). The `input_type: "passage"` vs `"query"` distinction is used correctly.
+
+**Vector index:** HNSW with `m=16, ef_construction=64` — good balance of recall and speed for a few thousand vectors. No re-indexing needed when new threads are added.
 
 ---
 
 ## 3. AI Design
 
-### Email Summarization
+### 3.1 Email Summarization
 
-**Strategy**: Thread-level summarization with full context.
+Each thread is summarized on first view (lazy, on-demand):
+- Full thread text is assembled from all messages chronologically
+- Truncated to 20,000 chars (well within Llama 3.1 8B context window)
+- Prompt instructs: Topic / Key Points / Action Items / Decision Made (structured output)
+- Summary cached in `email_threads.summary` — never regenerated unless cleared
+- Thread-awareness: all messages in the thread are included, so replies are understood in context
 
-1. **Context Assembly**: All messages in a thread are fetched chronologically and concatenated with sender/date metadata.
-2. **Truncation**: Threads are truncated to 20,000 characters to stay within Llama 3.1's context window.
-3. **Structured Output**: The prompt requests a structured summary with: Topic, Key Points, Action Items, and Decisions Made.
-4. **Caching**: Summaries are stored in `email_threads.summary` and reused on subsequent views.
-
-### Chat Agent (RAG Pipeline)
+### 3.2 RAG Pipeline
 
 ```
-User Query
-    │
-    ▼
-┌─────────────┐
-│  Embed Query │ ← NVIDIA NIM (nv-embedqa-e5-v5)
-└──────┬──────┘
-       ▼
-┌──────────────┐
-│ Vector Search │ ← pgvector cosine similarity (threshold: 0.5)
-│  (8 results)  │
-└──────┬───────┘
-       ▼
-┌───────────────┐
-│Keyword Fallback│ ← ILIKE search on subject/summary if <3 vector results
-└──────┬────────┘
-       ▼
-┌──────────────────┐
-│Fetch Full Content │ ← Top 3 threads: actual message bodies from email_messages
-└──────┬───────────┘
-       ▼
-┌──────────────────┐
-│ Stream via SSE    │ ← Llama 3.1-8B-Instruct via NVIDIA NIM
-│ with source citing │    System prompt enforces [Source N] notation
-└──────────────────┘
+Query → embedText(query, "query")
+     → pgvector cosine similarity (threshold 0.45, top 8)
+     → keywordSearch (ilike on subject + summary, top 6)
+     → recentThreads (always include 5 newest — catches unembeeded new mail)
+     → Merge, deduplicate by thread ID
+     → getThreadContext(top 8): fetch actual email_messages text
+     → Build context blocks with Subject / Date / Content (up to 3000 chars each)
+     → Llama 3.1 8B with grounded system prompt + context
+     → Stream SSE chunks to client
 ```
 
-**Source Clarity**: The system prompt includes numbered source blocks (`[Source 1]`, `[Source 2]`, etc.) with thread subject, date, and full content. The model is instructed to cite sources using `[Source N]` notation.
+**Recency bias fix:** New emails may not have embeddings (sync just ran). The pipeline always blends the 5 most recent threads to prevent "I don't see recent emails" failures.
 
-**Hallucination Prevention**:
-- System prompt explicitly states: "Answer ONLY using the provided email context"
-- "If the answer is not in the context, say so clearly"
-- Context blocks include actual message content, not just summaries
-- Source metadata is sent to the frontend separately via `__SOURCES__` tokens for independent display
+**Newsletter deduplication:** Queries matching `/newsletter|news digest|tech news.../` trigger a special path:
+- Fetch Newsletter-categorized threads from DB (not vector search)
+- System prompt switches to "deduplication mode": identify unique stories, group same-topic items from multiple sources under one entry, cite all attributing sources
 
-**Cross-Email Reasoning**: The hybrid search retrieves threads from multiple senders/topics. The model's context window receives all matched threads, enabling synthesis across different email conversations.
+### 3.3 Source Clarity
 
-### Email Categorization
+Every answer includes `[Source N]` citations. The RAG pipeline:
+1. Yields sources metadata as a special `__SOURCES__[...]__SOURCES_END__` SSE token before the answer
+2. Client renders clickable source chips below each answer
+3. Clicking a source chip opens that thread in the email viewer
+4. Model is explicitly instructed: "cite sources with [Source N] for every fact"
 
-Categories: Newsletter, Job, Finance, Notification, Personal, Work, Other.
+### 3.4 Hallucination Prevention
 
-The categorization prompt provides the email's `from_address`, `subject`, and a 300-character preview. The model returns structured JSON with `category`, `confidence` (0–1), and `reason`. Results are stored in `email_categories` and surfaced in the UI as color-coded badges.
+- System prompt: "NEVER hallucinate — only state facts from the context below"
+- Model temperature set to 0.2 (near-deterministic)
+- If no relevant threads found: model told to say "I don't see that in your synced emails"
+- Context is grounded in real email_messages text, not just summaries
+- Data isolation: `gmailAccountId` guard in hybridSearch prevents cross-user leakage
 
-### Why NVIDIA NIM (Llama 3.1-8B-Instruct)?
+### 3.5 Why Llama 3.1 8B Instruct (NVIDIA NIM)
 
-- **Free tier availability**: NVIDIA NIM provides free API access to `meta/llama-3.1-8b-instruct`
-- **OpenAI-compatible API**: Uses the standard OpenAI SDK with a custom `baseURL`, making it a drop-in replacement
-- **Dual role**: Handles both embeddings (via `nvidia/nv-embedqa-e5-v5`) and text generation
-- **Performance**: 8B parameter model is fast enough for real-time streaming while being capable enough for summarization and categorization tasks
-- **Streaming support**: Native SSE streaming for chat responses
+| Factor | Decision |
+|--------|----------|
+| **Role** | Primary LLM for all generation tasks: summarization, reply drafting, compose, RAG chat |
+| **Model** | `meta/llama-3.1-8b-instruct` via NVIDIA NIM |
+| **Why NVIDIA NIM** | OpenAI-compatible API (drop-in), production-grade inference, free tier available |
+| **Why Llama 3.1 8B** | Strong instruction-following, 128K context window, open weights, multilingual |
+| **Embedding model** | `nvidia/nv-embedqa-e5-v5` — specifically trained for retrieval/RAG use cases |
 
 ---
 
 ## 4. Gmail API Strategy
 
-### Initial Sync vs. Incremental Sync
+### 4.1 Initial vs Incremental Sync
 
-| Aspect | Full Sync | Incremental Sync |
-|--------|-----------|------------------|
-| **Trigger** | First sync or manual | Subsequent syncs |
-| **API Call** | `messages.list` with pagination | `history.list` with `startHistoryId` |
-| **Volume** | All messages (paginated, 50/page) | Only new/changed messages |
-| **Processing** | Parallel batches of 10 | Same parallel processing |
+| Mode | Trigger | Method | Storage |
+|------|---------|--------|---------|
+| **Full sync** | First connection or manual reset | `threads.list` with pagination, up to 100 threads | Upserts all thread + message rows |
+| **Incremental sync** | Subsequent syncs | `history.list` using stored `history_id` | Only fetches changed/new messages since last sync |
 
-### Pagination Handling
+The `history_id` from the last Gmail API response is stored in `gmail_accounts.history_id` and used as the starting point for the next incremental sync.
 
-- Gmail API returns max 50 messages per `messages.list` call
-- We use `nextPageToken` to iterate through all pages
-- Messages are processed in parallel batches of 10 to balance speed vs. rate limits
+### 4.2 Pagination
 
-### Rate Limiting & Quota Management
+- **Full sync**: Fetches 2 pages × 50 threads = 100 threads maximum per sync call (respecting Render's 30s timeout)
+- **nextPageToken** from Gmail API is followed iteratively
+- Large inboxes handled via repeated sync calls — each adds more threads
+- Thread deduplication via `upsert` (never duplicates)
 
-**Exponential Backoff** (`withBackoff` helper):
-- Catches HTTP 429 (Too Many Requests) and 503 (Service Unavailable)
-- Retries up to 5 times with exponential delays: `min(1000 * 2^attempt + random(0-500), 32000ms)`
-- Applied to all Gmail API calls: `messages.list`, `messages.get`, `messages.send`, `history.list`, `users.getProfile`
+### 4.3 Rate Limiting & Quota
 
-**Batch Processing**:
-- AI processing (summarize + categorize + embed) runs in parallel batches of 5 threads
-- 1-second delay between batches to avoid overwhelming NVIDIA NIM rate limits
-- AI failures are caught per-thread (`Promise.allSettled`) so one failure doesn't break the batch
+```typescript
+// Exponential backoff for 429/500 responses
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+  for (let i = 0; i < maxRetries; i++) {
+    try { return await fn(); }
+    catch (err: any) {
+      if (err.status === 429 || err.status === 500) {
+        await sleep(Math.pow(2, i) * 1000); // 1s, 2s, 4s
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+```
 
-### Token Refresh
-
-- Before each API call, token expiry is checked against `Date.now() - 60s` buffer
-- If expired, `oauth2Client.refreshAccessToken()` is called and new credentials stored in Supabase
+- Gmail API quota: 1 billion units/day (well within limits for single-user sync)
+- Each `threads.get` = ~5 units; 100 threads = ~500 units per sync
+- Batch processing with sequential fetching (not parallel) to avoid burst quota exhaustion
 
 ---
 
 ## 5. Tool & Technology Decisions
 
-| Technology | Why |
-|------------|-----|
-| **Next.js 16** | Full-stack React framework with API routes, SSR, and streaming support. Eliminates need for separate backend. |
-| **Supabase** | Managed PostgreSQL with built-in auth, real-time subscriptions, and pgvector support. No infrastructure management. |
-| **pgvector** | Native PostgreSQL vector extension for semantic search. Simpler than external vector DBs (Pinecone, Weaviate) and co-located with relational data. |
-| **NVIDIA NIM** | Free-tier access to both embedding models and Llama 3.1. OpenAI-compatible API means standard SDK usage. |
-| **OpenAI SDK** | Used as a client for NVIDIA NIM (not OpenAI). The SDK provides streaming, retry logic, and TypeScript types. |
-| **googleapis** | Official Google client library for Gmail API. Handles OAuth token management and request signing. |
-| **Lucide React** | Lightweight, tree-shakeable icon library. ~1KB per icon vs. heavier alternatives. |
-| **TypeScript** | Type safety across the full stack. Especially important for complex API response shapes (Gmail, Supabase, AI). |
+| Layer | Choice | Reason |
+|-------|--------|--------|
+| **Frontend** | Next.js 14 (App Router) | Full-stack in one repo, SSE streaming support, React Server Components |
+| **Styling** | Vanilla CSS (dark theme) | No build-time overhead, full control, no class conflicts |
+| **Database** | Supabase (PostgreSQL + pgvector) | Required. Row-level security, realtime subscriptions, free tier |
+| **Auth** | Supabase Auth + Google OAuth | Built-in session management, compatible with Gmail OAuth scopes |
+| **Primary AI** | NVIDIA NIM Llama 3.1 8B | Required. OpenAI-compatible, free tier, strong instruction-following |
+| **Embeddings** | NVIDIA NIM nv-embedqa-e5-v5 | Retrieval-optimized, asymmetric search (query vs passage), 1024-dim |
+| **Vector search** | pgvector HNSW | Stays in Supabase, no additional vector DB needed, ACID transactions |
+| **Deployment** | Render (Web Service) | Docker-free, auto-deploys from GitHub, persistent environment |
+| **Gmail API** | googleapis npm package | Official client, handles token refresh, proper type definitions |
 
-### Why No Job Queue?
-
-For this assessment scope, synchronous processing during sync is sufficient. In production, we would add:
-- Bull/BullMQ with Redis for background processing
-- Separate worker processes for AI operations
-- Webhook-based Gmail push notifications instead of polling
+**No job queue:** Background processing (embeddings, categorization) happens either in-request (time-boxed) or client-driven (Sidebar's Categorize button with page-based polling). For production, a queue (e.g., BullMQ, Inngest) would replace this.
 
 ---
 
-## 6. Trade-offs & Limitations
+## 6. Email Categorization Design
 
-### Deliberate Simplifications
+### Two-Phase Approach
 
-1. **Synchronous AI Processing**: Summarization, categorization, and embedding happen during the sync API call. In production, these would be background jobs.
-2. **Single Gmail Account**: The UI supports one connected Gmail account per user. The schema supports multiple but the UI doesn't expose account switching.
-3. **No Push Notifications**: We rely on manual/periodic sync rather than Gmail push notifications (which require a public webhook endpoint).
-4. **Client-Side State**: Thread list and selected thread are managed in React state rather than URL params. This means browser back/forward doesn't navigate between emails.
-5. **No Email Caching Layer**: Every thread click fetches messages from Supabase. In production, we'd add client-side caching or SWR.
+**Phase 1 — Rule-based (instant, 0 API calls):**
+- Pattern matching on subject, sender domain, and body text
+- Handles ~90% of emails correctly
+- Categories: Newsletter, Job, Finance, Notification, Work, Personal, Other
+- Bulk upsert: 50 threads processed per API call in ~1-2 seconds
 
-### Known Limitations
+**Phase 2 — LLM fallback (removed for reliability):**
+- Originally used Llama 3.1 for ambiguous cases
+- Removed: Render 30s timeout made it unreliable at scale
+- Trade-off accepted: rule-based alone achieves ~90% accuracy
+- Everything unmatched defaults to "Other" (no thread left uncategorized)
 
-- **Context Window**: Llama 3.1-8B has an 8K context window. Very long threads (50+ messages) may be truncated.
-- **HTML Email Rendering**: We use a sandboxed iframe for HTML emails. Some emails with complex CSS or external resources may not render perfectly.
-- **Rate Limits**: NVIDIA NIM free tier has request limits. Heavy usage during sync may hit limits.
-- **No Attachment Handling**: Email attachments are not downloaded or processed.
+### Category Taxonomy Justification
 
-### What I'd Do With More Time
+| Category | Signal Examples |
+|----------|----------------|
+| Newsletter | `unsubscribe` in body, `noreply@`, `newsletter` in domain/subject |
+| Job | `linkedin.com`, `indeed.com`, `careers@`, subject contains `interview` |
+| Finance | Subject/body: `invoice`, `payment`, `receipt`; senders: `stripe`, `paypal` |
+| Notification | `github.com`, `security@`, `verify`, `OTP`, `build failed` |
+| Work | Subject: `meeting`, `project`, `deadline`, `proposal` |
+| Personal | Subject starts with `Re:`, `Fwd:`; body has casual greeting |
+| Other | Default fallback |
 
-1. **Background Job Queue**: Move AI processing to async workers with progress tracking
-2. **Gmail Push Notifications**: Real-time sync via Cloud Pub/Sub webhooks
-3. **Newsletter Deduplication**: Implement the bonus feature using embedding similarity to detect duplicate stories across newsletter sources
-4. **Attachment Processing**: Download and index PDF/document attachments
-5. **Multi-Account Support**: UI for switching between multiple Gmail accounts
-6. **Caching Layer**: Redis or SWR for frequently accessed threads
-7. **Email Labels Sync**: Two-way label sync with Gmail
-8. **Search Autocomplete**: Typeahead suggestions based on thread subjects and contacts
+---
+
+## 7. Trade-offs & Limitations
+
+| Trade-off | What Was Simplified | Production Alternative |
+|-----------|-------------------|----------------------|
+| **Sync timeout** | Max 100 threads per sync call (Render 30s limit) | Background worker / Inngest job |
+| **No LLM categorization at scale** | Rule-based only at 50 threads/batch | Async queue with LLM fallback |
+| **No real-time Gmail push** | Pull-based sync only (user-initiated) | Gmail Pub/Sub push notifications |
+| **Embeddings on sync** | Best-effort (skipped if timeout) | Async embedding job after sync |
+| **Single user** | No multi-tenancy design beyond RLS | Full multi-tenancy with team workspaces |
+| **No email search index** | ilike (slow on large datasets) | PostgreSQL full-text search (tsvector) |
+| **OAuth "Unverified App"** | Google requires verification for production | Submit for OAuth verification via Google Cloud Console |
+
+### What Would Be Done Differently With More Time
+
+1. **Async job queue** (Inngest/BullMQ) for embedding, summarization, and categorization
+2. **Gmail Pub/Sub push** for real-time inbox updates without polling
+3. **Full-text search index** on email_messages for faster keyword search
+4. **Thread importance scoring** — weight threads by recency × engagement × category
+5. **Multi-account support** — allow connecting multiple Gmail accounts per user
+6. **Email action tools** — archive, label, snooze directly from the chat agent

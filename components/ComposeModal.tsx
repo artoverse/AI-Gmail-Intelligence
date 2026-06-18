@@ -41,7 +41,7 @@ export default function ComposeModal({
   }, [replyTo, threadId]);
 
   const handleDraftWithAI = async () => {
-    if (!threadId && !instruction) return;
+    if (!instruction.trim()) return;
     setIsDrafting(true);
     setError(null);
 
@@ -51,14 +51,18 @@ export default function ComposeModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           threadId: threadId || '',
-          action: 'draft_reply',
-          instruction: instruction || 'Write a professional reply',
+          action: threadId ? 'draft_reply' : 'draft_compose',
+          instruction: instruction.trim(),
           userEmail,
         }),
       });
       const data = await res.json();
       if (data.draft) {
         setBody(data.draft);
+        // For new emails, auto-fill subject if returned
+        if (!threadId && data.subject && !emailSubject) {
+          setEmailSubject(data.subject);
+        }
       } else {
         setError('Could not generate draft. Try again.');
       }
@@ -68,6 +72,7 @@ export default function ComposeModal({
       setIsDrafting(false);
     }
   };
+
 
   const handleSend = async () => {
     if (!to || !emailSubject || !body) {
@@ -143,35 +148,40 @@ export default function ComposeModal({
             />
           </div>
 
-          {/* AI Draft Section */}
-          {threadId && (
-            <div className="ai-draft-section">
-              <label className="field-label">AI Draft Instruction</label>
-              <div className="ai-draft-row">
-                <input
-                  type="text"
-                  className="field-input flex-1"
-                  value={instruction}
-                  onChange={(e) => setInstruction(e.target.value)}
-                  placeholder="e.g. Accept the meeting, ask for reschedule..."
-                  id="draft-instruction"
-                />
-                <button
-                  className="draft-btn"
-                  onClick={handleDraftWithAI}
-                  disabled={isDrafting}
-                  id="ai-draft-btn"
-                >
-                  {isDrafting ? (
-                    <Loader2 size={14} className="animate-spin" />
-                  ) : (
-                    <Sparkles size={14} />
-                  )}
-                  {isDrafting ? 'Drafting...' : 'Draft'}
-                </button>
-              </div>
+          {/* AI Draft Section — works for both new compose and replies */}
+          <div className="ai-draft-section">
+            <label className="field-label">
+              {threadId ? 'AI Reply Instruction' : 'AI Compose Prompt'}
+            </label>
+            <div className="ai-draft-row">
+              <input
+                type="text"
+                className="field-input flex-1"
+                value={instruction}
+                onChange={(e) => setInstruction(e.target.value)}
+                placeholder={
+                  threadId
+                    ? 'e.g. Accept the meeting, ask for reschedule...'
+                    : 'e.g. Write a follow-up to the product team about Q3 launch delay'
+                }
+                id="draft-instruction"
+              />
+              <button
+                className="draft-btn"
+                onClick={handleDraftWithAI}
+                disabled={isDrafting || !instruction.trim()}
+                id="ai-draft-btn"
+              >
+                {isDrafting ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Sparkles size={14} />
+                )}
+                {isDrafting ? 'Drafting...' : 'Draft with AI'}
+              </button>
             </div>
-          )}
+          </div>
+
 
           <div className="form-field">
             <label className="field-label">Message</label>

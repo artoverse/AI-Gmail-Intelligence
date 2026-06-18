@@ -129,6 +129,27 @@ function isRecencyQuery(query: string): boolean {
   return RECENCY_TERMS.some((t) => lower.includes(t));
 }
 
+// ─── Newsletter queries — fetch newsletter-categorized threads directly ───
+function isNewsletterQuery(query: string): boolean {
+  return /newsletter|news digest|tech news|what('s| is) new|recent news|top stories|headlines/i.test(query);
+}
+
+async function newsletterSearch(gmailAccountId: string, limit = 10): Promise<RetrievedThread[]> {
+  // Get thread IDs categorized as Newsletter
+  const { data } = await supabaseAdmin
+    .from('email_threads')
+    .select(`
+      id, subject, summary, last_message_date, participants,
+      email_categories!inner(category)
+    `)
+    .eq('gmail_account_id', gmailAccountId)
+    .eq('email_categories.category', 'Newsletter')
+    .order('last_message_date', { ascending: false })
+    .limit(limit);
+
+  return (data ?? []).map(t => ({ ...t, similarity: 0.9 })) as RetrievedThread[];
+}
+
 export async function hybridSearch(
   query: string,
   gmailAccountId?: string
@@ -136,8 +157,20 @@ export async function hybridSearch(
   // Safety guard: never search across all accounts (prevents cross-user data leaks)
   if (!gmailAccountId) return [];
 
+  // For newsletter/news digest queries — fetch Newsletter-categorized threads directly
+  if (isNewsletterQuery(query)) {
+    const newsletters = await newsletterSearch(gmailAccountId, 8);
+    // Supplement with semantic search results too
+    const semantic = await semanticSearch(query, gmailAccountId, { matchThreshold: 0.4, matchCount: 4 });
+    const seen = new Set<string>();
+    const combined: RetrievedThread[] = [];
+    for (const r of [...newsletters, ...semantic]) {
+      if (!seen.has(r.id)) { seen.add(r.id); combined.push(r); }
+    }
+    return combined.slice(0, 10);
+  }
+
   // Always fetch the 5 most recent threads to ground the assistant in current reality
-  // (new emails won't have embeddings yet, so vector search misses them)
   const recent = await recentThreads(gmailAccountId, 5);
 
   // For recency-based queries ("what are my recent emails?") just return date-sorted results

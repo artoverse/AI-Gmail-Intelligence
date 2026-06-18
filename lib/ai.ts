@@ -182,7 +182,41 @@ Write a professional, concise email reply.
 }
 
 // ─────────────────────────────────────────────────────────────
-// RAG Answer Generation (Llama 3 via Hugging Face)
+// Compose New Email from Natural Language Prompt (Feature 3)
+// ─────────────────────────────────────────────────────────────
+export async function draftNewEmail(
+  instruction: string,
+  userEmail: string
+): Promise<{ subject: string; draft: string }> {
+  const client = getHfClient();
+
+  const response = await client.chat.completions.create({
+    model: HF_MODEL,
+    messages: [
+      {
+        role: 'system',
+        content: `You are an expert email writer. Always respond with valid JSON only in this exact format:
+{"subject": "<concise subject line>", "draft": "<professional email body, no headers>"}`,
+      },
+      {
+        role: 'user',
+        content: `Write a professional email for: "${instruction}"\nSender: ${userEmail}\nKeep body under 200 words. Sign off naturally.`,
+      },
+    ],
+    max_tokens: 600,
+    temperature: 0.4,
+  });
+
+  const text = response.choices[0]?.message?.content ?? '';
+  try {
+    const match = text.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(match ? match[0] : text);
+    return { subject: parsed.subject ?? '', draft: parsed.draft ?? text };
+  } catch {
+    return { subject: '', draft: text };
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 
 export type ChatMessage = {
@@ -259,61 +293,81 @@ export async function* generateGroundedAnswerStream(
 ): AsyncGenerator<string> {
   const client = getHfClient();
 
+  // Detect newsletter / news digest queries → trigger deduplication instruction
+  const isNewsletterQuery = /newsletter|news digest|tech news|what('s| is) new|recent news|top stories|headlines/i.test(query);
+
   // Build rich context blocks — prefer actual message content over summaries
   const contextBlocks = retrievedThreads
-    .map(
-      (t, i) => {
-        const date = t.last_message_date
-          ? new Date(t.last_message_date).toLocaleString('en-US', {
-              month: 'short', day: 'numeric', year: 'numeric',
-              hour: '2-digit', minute: '2-digit'
-            })
-          : 'unknown date';
-        const content = t.content?.trim() || t.summary || 'No content available';
-        return (
-          `[Source ${i + 1}]\n` +
-          `Subject: ${t.subject ?? 'No Subject'}\n` +
-          `Date: ${date}\n` +
-          `Content:\n${content.slice(0, 3000)}`
-        );
-      }
-    )
+    .map((t, i) => {
+      const date = t.last_message_date
+        ? new Date(t.last_message_date).toLocaleString('en-US', {
+            month: 'short', day: 'numeric', year: 'numeric',
+            hour: '2-digit', minute: '2-digit',
+          })
+        : 'unknown date';
+      const content = t.content?.trim() || t.summary || 'No content available';
+      return (
+        `[Source ${i + 1}]\n` +
+        `Subject: ${t.subject ?? 'No Subject'}\n` +
+        `Date: ${date}\n` +
+        `Content:\n${content.slice(0, 3000)}`
+      );
+    })
     .join('\n\n━━━\n\n');
 
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = chatHistory
     .slice(-8)
     .map(m => ({
       role: m.role === 'model' ? 'assistant' : 'user',
-      content: m.content
+      content: m.content,
     }));
-
-  const noEmailsMsg = retrievedThreads.length === 0
-    ? 'No emails have been indexed yet. Please sync your Gmail first using the Sync button in the sidebar.'
-    : '';
 
   const inboxStats = inboxMeta
     ? `Inbox stats: ${inboxMeta.totalThreads} total threads, ${inboxMeta.totalMessages} total messages synced.`
     : '';
 
-  const systemPrompt = retrievedThreads.length === 0
-    ? `You are a Gmail AI assistant. ${noEmailsMsg}`
-    : `You are an intelligent Gmail assistant. Answer questions using the email context below.
+  let systemPrompt: string;
+
+  if (retrievedThreads.length === 0) {
+    systemPrompt = `You are a Gmail AI assistant. No emails have been indexed yet. Tell the user to sync their Gmail using the Sync button.`;
+  } else if (isNewsletterQuery) {
+    systemPrompt = `You are an intelligent Gmail assistant specializing in newsletter digest and deduplication.
+
+${inboxStats}
+
+NEWSLETTER DEDUPLICATION RULES:
+- Identify all unique news stories/topics across ALL sources below
+- If the same story appears in multiple newsletters, group them under ONE entry
+- List each unique story ONCE, with attribution like: "From [Source 1], [Source 3]"
+- Remove pure duplicates — same story, different wording = one entry
+- Format as a clean numbered list: "1. **Story Title** — brief summary [Source N, Source M]"
+- Sort by recency/importance
+
+Email context (${retrievedThreads.length} newsletter/email sources):
+━━━
+${contextBlocks}
+━━━`;
+  } else {
+    systemPrompt = `You are an intelligent Gmail assistant. Answer questions using the email context below.
 
 ${inboxStats}
 
 STRICT RULES:
-- Use [Source N] to cite where info came from
-- Answer directly and completely using ALL available sources
-- Use the inbox stats above for questions about total counts (e.g. "how many emails do I have")
-- The context below shows the ${retrievedThreads.length} most relevant emails for this query — NOT the total inbox
-- Be specific with dates, names, senders, and details
-- If info isn't in the context, say "I don't see that in your synced emails"
-- For "most recent" or "latest" questions, sort by Date and list them in order
+- Cite sources with [Source N] for every fact you state
+- Answer directly using ALL available sources — synthesize across emails when needed
+- Use inbox stats for total count questions ("how many emails do I have")
+- The context shows the ${retrievedThreads.length} most relevant emails for this query
+- Be specific with dates, names, senders, and dollar amounts
+- For "most recent"/"latest" → sort by Date field and list in order
+- For cross-email reasoning (e.g. "all emails about project X") → synthesize ALL matching sources
+- If info isn't in the context, say exactly: "I don't see that in your synced emails"
+- NEVER hallucinate — only state facts from the context below
 
 Email context (${retrievedThreads.length} most relevant emails):
 ━━━
 ${contextBlocks}
 ━━━`;
+  }
 
   messages.unshift({ role: 'system', content: systemPrompt });
   messages.push({ role: 'user', content: query });
@@ -323,7 +377,7 @@ ${contextBlocks}
     messages,
     stream: true,
     max_tokens: 1500,
-    temperature: 0.2,  // low temp = more accurate, less hallucination
+    temperature: 0.2,
   });
 
   for await (const chunk of stream) {
@@ -331,3 +385,4 @@ ${contextBlocks}
     if (content) yield content;
   }
 }
+

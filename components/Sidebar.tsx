@@ -93,7 +93,9 @@ export default function Sidebar({
       console.error('Categorize loop error:', err);
     } finally {
       setIsCategorizing(false);
-      // Reload final status
+      // Fire event so ThreadList reloads with fresh categories
+      window.dispatchEvent(new Event('categories-updated'));
+      // Reload final status count
       if (userId) {
         fetch(`/api/gmail/categorize?userId=${userId}`)
           .then((r) => r.json())

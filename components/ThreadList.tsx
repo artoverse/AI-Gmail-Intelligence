@@ -76,7 +76,7 @@ export default function ThreadList({
     if (page > 0) loadThreads();
   }, [page]);
 
-  // Real-time subscription
+  // Real-time subscription for thread changes
   useEffect(() => {
     if (!gmailAccountId) return;
     const channel = supabase
@@ -86,8 +86,20 @@ export default function ThreadList({
         { event: '*', schema: 'public', table: 'email_threads' },
         () => { setPage(0); loadThreads(); }
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'email_categories' },
+        () => { setPage(0); loadThreads(); } // reload when categories change
+      )
       .subscribe();
     return () => { supabase.removeChannel(channel); };
+  }, [gmailAccountId]);
+
+  // Also listen for custom event fired by Sidebar after categorization done
+  useEffect(() => {
+    const refresh = () => { setPage(0); loadThreads(); };
+    window.addEventListener('categories-updated', refresh);
+    return () => window.removeEventListener('categories-updated', refresh);
   }, [gmailAccountId]);
 
   // Semantic search
