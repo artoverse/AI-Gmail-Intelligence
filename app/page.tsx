@@ -19,7 +19,7 @@ type Toast = {
 export default function HomePage() {
   // Auth
   const [user, setUser] = useState<{ id: string; email: string | undefined } | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   // Gmail connection
   const [connectedEmail, setConnectedEmail] = useState<string | null>(null);
