@@ -99,9 +99,13 @@ function extractBody(payload: GooglePayload): { text: string; html: string } {
   function walk(part: GooglePayload) {
     if (!part) return;
     if (part.mimeType === 'text/plain' && part.body?.data) {
-      text += Buffer.from(part.body.data, 'base64url').toString('utf-8');
+      try {
+        text += Buffer.from(part.body.data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8');
+      } catch {}
     } else if (part.mimeType === 'text/html' && part.body?.data) {
-      html += Buffer.from(part.body.data, 'base64url').toString('utf-8');
+      try {
+        html += Buffer.from(part.body.data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8');
+      } catch {}
     }
     if (part.parts) part.parts.forEach(walk);
   }
