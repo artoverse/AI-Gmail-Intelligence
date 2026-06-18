@@ -19,7 +19,7 @@ type Toast = {
 export default function HomePage() {
   // Auth
   const [user, setUser] = useState<{ id: string; email: string | undefined } | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   // Gmail connection
   const [connectedEmail, setConnectedEmail] = useState<string | null>(null);
@@ -45,71 +45,51 @@ export default function HomePage() {
     }, 4000);
   }, []);
 
-  // Initialize auth — use getSession for initial check, onAuthStateChange for updates
+  // Initialize auth
   useEffect(() => {
-    let mounted = true;
-
     const init = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        if (mounted && session?.user) {
+        if (session?.user) {
           setUser({ id: session.user.id, email: session.user.email });
-          try { await loadGmailAccount(session.user.id); } catch {}
+          await loadGmailAccount(session.user.id);
         }
       } catch (err) {
-        console.error('getSession error:', err);
+        console.error('Auth init error:', err);
+      } finally {
+        setLoading(false);
       }
     };
 
     init();
 
-    // Listen for subsequent auth changes (sign-in from callback, sign-out, etc.)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (!mounted) return;
-        if (event === 'SIGNED_IN' && session?.user) {
-          setUser({ id: session.user.id, email: session.user.email });
-          try { await loadGmailAccount(session.user.id); } catch {}
-        } else if (event === 'SIGNED_OUT') {
-          setUser(null);
-          setConnectedEmail(null);
-          setGmailAccountId(null);
-        }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        setUser({ id: session.user.id, email: session.user.email });
+        await loadGmailAccount(session.user.id);
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setConnectedEmail(null);
+        setGmailAccountId(null);
       }
-    );
+    });
 
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, []);
 
-  // Handle URL params after Gmail OAuth callback
+  // Handle URL params after OAuth callback
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const isConnected = params.get('connected') === 'true';
-    const errorParam = params.get('error');
-
-    if (!isConnected && !errorParam) return;
-
-    // Clear params from URL immediately
-    window.history.replaceState({}, '', '/');
-
-    if (isConnected) {
-      // Show toast then do a full reload so the sidebar picks up the new
-      // gmail_accounts record without any race-condition complexity
-      showToast('success', 'Gmail connected! Loading your emails…');
-      setTimeout(() => window.location.reload(), 1500);
+    if (params.get('connected') === 'true') {
+      showToast('success', 'Gmail connected successfully!');
+      window.history.replaceState({}, '', '/');
+      if (user) loadGmailAccount(user.id);
     }
-
-    if (errorParam) {
-      const detail = params.get('detail');
-      const msg = detail ? `${errorParam}: ${detail}` : errorParam;
-      showToast('error', `Connection failed: ${msg}`);
+    if (params.get('error')) {
+      showToast('error', `Connection failed: ${params.get('error')}`);
+      window.history.replaceState({}, '', '/');
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  }, [user]);
 
   const loadGmailAccount = async (userId: string) => {
     const { data } = await supabase
@@ -137,7 +117,7 @@ export default function HomePage() {
     await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${appUrl}/auth/callback`,
+        redirectTo: appUrl,
         scopes: 'email profile',
       },
     });
@@ -175,20 +155,9 @@ export default function HomePage() {
   };
 
   const handleLogout = async () => {
-    try {
-      await supabase.auth.signOut({ scope: 'local' });
-    } catch (err) {
-      console.error('Sign out error:', err);
-    }
-    // Manually clear all Supabase localStorage tokens as a failsafe
-    try {
-      Object.keys(localStorage)
-        .filter(k => k.startsWith('sb-'))
-        .forEach(k => localStorage.removeItem(k));
-      localStorage.removeItem('supabase.auth.token');
-    } catch {}
-    // Hard navigate to root — full page reload, no Next.js caching
-    window.location.replace('/');
+    await supabase.auth.signOut();
+    // Reload the page to fully clear all state
+    window.location.reload();
   };
 
   const handleSelectThreadFromChat = useCallback(
