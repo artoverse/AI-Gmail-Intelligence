@@ -52,12 +52,14 @@ export default function HomePage() {
         const { data: { session } } = await supabase.auth.getSession();
         if (session?.user) {
           setUser({ id: session.user.id, email: session.user.email });
-          await loadGmailAccount(session.user.id);
+          setLoading(false); // unblock UI immediately after session check
+          loadGmailAccount(session.user.id); // load Gmail info in background (non-blocking)
+        } else {
+          setLoading(false); // no session → show auth screen
         }
       } catch (err) {
         console.error('Auth init error:', err);
-      } finally {
-        setLoading(false);
+        setLoading(false); // always unblock on error
       }
     };
 
@@ -66,7 +68,7 @@ export default function HomePage() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_IN' && session?.user) {
         setUser({ id: session.user.id, email: session.user.email });
-        await loadGmailAccount(session.user.id);
+        loadGmailAccount(session.user.id);
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setConnectedEmail(null);
