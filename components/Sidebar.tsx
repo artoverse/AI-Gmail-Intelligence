@@ -55,29 +55,58 @@ export default function Sidebar({
   const handleCategorize = async () => {
     if (!userId || isCategorizing) return;
     setIsCategorizing(true);
+
+    let page = 0;
+    let totalCategorized = 0;
+
     try {
-      const res = await fetch('/api/gmail/categorize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setCatStatus((prev) => ({
-          total: prev?.total ?? 0,
-          categorized: (prev?.categorized ?? 0) + (data.ruleCategorized ?? 0) + (data.llmCategorized ?? 0),
-        }));
-        // If there's more to categorize, auto-run again after a short delay
-        if (data.remaining > 0) {
-          setTimeout(() => handleCategorize(), 2000);
+      while (true) {
+        const res = await fetch('/api/gmail/categorize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, page }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || data.error) {
+          console.error('Categorize error:', data.error);
+          break;
         }
+
+        totalCategorized += data.categorized ?? 0;
+        page++;
+
+        // Update progress counter
+        setCatStatus((prev) => prev
+          ? { ...prev, categorized: Math.min(prev.total, prev.categorized + (data.categorized ?? 0)) }
+          : null
+        );
+
+        // Stop when endpoint says we're done
+        if (data.done) break;
+
+        // Small pause between pages to avoid overwhelming the server
+        await new Promise((r) => setTimeout(r, 300));
       }
     } catch (err) {
-      console.error('Categorize error:', err);
+      console.error('Categorize loop error:', err);
     } finally {
       setIsCategorizing(false);
+      // Reload final status
+      if (userId) {
+        fetch(`/api/gmail/categorize?userId=${userId}`)
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.total !== undefined) {
+              setCatStatus({ total: data.total, categorized: data.categorized });
+            }
+          })
+          .catch(() => {});
+      }
     }
   };
+
 
   const uncategorizedCount = catStatus ? catStatus.total - catStatus.categorized : null;
   const allCategorized = catStatus && uncategorizedCount !== null && uncategorizedCount <= 0;
