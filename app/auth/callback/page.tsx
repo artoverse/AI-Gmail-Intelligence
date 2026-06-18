@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect } from 'react';
+import { Suspense, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
@@ -30,27 +30,34 @@ function Spinner() {
 function CallbackHandler() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const hasRedirected = useRef(false);
 
   useEffect(() => {
     const next = searchParams.get('next') ?? '/';
 
-    // With implicit flow, Supabase automatically detects the session
-    // from the URL hash (#access_token=...) when the client initialises.
-    // We just need to wait for the SIGNED_IN event, then navigate.
+    // With implicit flow, the access_token is in the URL hash fragment.
+    // Supabase JS auto-detects it and fires TOKEN_REFRESHED or SIGNED_IN.
+    // We listen for any event where a valid session exists, then redirect.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event) => {
-        if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+      (event, session) => {
+        // Only redirect once we have a real session
+        if (session && !hasRedirected.current) {
+          hasRedirected.current = true;
           subscription.unsubscribe();
-          router.replace(next);
+          // Use window.location for a full page reload to ensure clean state
+          window.location.replace(next);
         }
       }
     );
 
-    // Safety: if no auth event fires within 5 seconds, go home anyway
+    // Safety: if no session appears within 8 seconds, go home
     const timeout = setTimeout(() => {
-      subscription.unsubscribe();
-      router.replace('/');
-    }, 5000);
+      if (!hasRedirected.current) {
+        hasRedirected.current = true;
+        subscription.unsubscribe();
+        window.location.replace('/');
+      }
+    }, 8000);
 
     return () => {
       clearTimeout(timeout);

@@ -45,38 +45,41 @@ export default function HomePage() {
     }, 4000);
   }, []);
 
-  // Initialize auth
+  // Initialize auth — use getSession for initial check, onAuthStateChange for updates
   useEffect(() => {
-    // Safety net: if auth state never fires, unblock the UI after 6 seconds
-    const timeout = setTimeout(() => setLoading(false), 6000);
+    let mounted = true;
 
-    // onAuthStateChange fires immediately with INITIAL_SESSION on first load.
-    // This is the single source of truth for auth state — no separate getSession() needed.
+    const init = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (mounted && session?.user) {
+          setUser({ id: session.user.id, email: session.user.email });
+          try { await loadGmailAccount(session.user.id); } catch {}
+        }
+      } catch (err) {
+        console.error('getSession error:', err);
+      }
+    };
+
+    init();
+
+    // Listen for subsequent auth changes (sign-in from callback, sign-out, etc.)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
-          if (session?.user) {
-            setUser({ id: session.user.id, email: session.user.email });
-            try {
-              await loadGmailAccount(session.user.id);
-            } catch (err) {
-              console.error('loadGmailAccount error:', err);
-            }
-          }
-          clearTimeout(timeout);
-          setLoading(false);
+        if (!mounted) return;
+        if (event === 'SIGNED_IN' && session?.user) {
+          setUser({ id: session.user.id, email: session.user.email });
+          try { await loadGmailAccount(session.user.id); } catch {}
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
           setConnectedEmail(null);
           setGmailAccountId(null);
-          clearTimeout(timeout);
-          setLoading(false);
         }
       }
     );
 
     return () => {
-      clearTimeout(timeout);
+      mounted = false;
       subscription.unsubscribe();
     };
   }, []);
@@ -159,7 +162,13 @@ export default function HomePage() {
   };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.error('Sign out error:', err);
+    }
+    // Force full reload — clears all in-memory state and Supabase localStorage tokens
+    window.location.href = '/';
   };
 
   const handleSelectThreadFromChat = useCallback(
