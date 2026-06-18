@@ -84,29 +84,22 @@ export default function HomePage() {
     };
   }, []);
 
-  // Handle URL params after OAuth callback
+  // Handle URL params after Gmail OAuth callback
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const isConnected = params.get('connected') === 'true';
     const errorParam = params.get('error');
 
-    if (isConnected || errorParam) {
-      window.history.replaceState({}, '', '/');
-    }
+    if (!isConnected && !errorParam) return;
+
+    // Clear params from URL immediately
+    window.history.replaceState({}, '', '/');
 
     if (isConnected) {
-      showToast('success', 'Gmail connected successfully!');
-      // Reload Gmail account — use a small delay to ensure DB write is complete,
-      // and fall back to getSession if user state isn't populated yet
-      const loadAccount = async () => {
-        let userId = user?.id;
-        if (!userId) {
-          const { data: { session } } = await supabase.auth.getSession();
-          userId = session?.user?.id;
-        }
-        if (userId) await loadGmailAccount(userId);
-      };
-      setTimeout(loadAccount, 500);
+      // Show toast then do a full reload so the sidebar picks up the new
+      // gmail_accounts record without any race-condition complexity
+      showToast('success', 'Gmail connected! Loading your emails…');
+      setTimeout(() => window.location.reload(), 1500);
     }
 
     if (errorParam) {
@@ -114,7 +107,9 @@ export default function HomePage() {
       const msg = detail ? `${errorParam}: ${detail}` : errorParam;
       showToast('error', `Connection failed: ${msg}`);
     }
-  }, [user]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
 
   const loadGmailAccount = async (userId: string) => {
     const { data } = await supabase
