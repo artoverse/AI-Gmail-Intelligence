@@ -93,7 +93,9 @@ export default function HomePage() {
       if (user) loadGmailAccount(user.id);
     }
     if (params.get('error')) {
-      showToast('error', `Connection failed: ${params.get('error')}`);
+      const detail = params.get('detail');
+      const msg = detail ? `${params.get('error')}: ${detail}` : params.get('error')!;
+      showToast('error', `Connection failed: ${msg}`);
       window.history.replaceState({}, '', '/');
     }
   }, [user]);
@@ -163,12 +165,19 @@ export default function HomePage() {
 
   const handleLogout = async () => {
     try {
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: 'local' });
     } catch (err) {
       console.error('Sign out error:', err);
     }
-    // Force full reload — clears all in-memory state and Supabase localStorage tokens
-    window.location.href = '/';
+    // Manually clear all Supabase localStorage tokens as a failsafe
+    try {
+      Object.keys(localStorage)
+        .filter(k => k.startsWith('sb-'))
+        .forEach(k => localStorage.removeItem(k));
+      localStorage.removeItem('supabase.auth.token');
+    } catch {}
+    // Hard navigate to root — full page reload, no Next.js caching
+    window.location.replace('/');
   };
 
   const handleSelectThreadFromChat = useCallback(
