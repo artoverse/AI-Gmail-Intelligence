@@ -251,7 +251,8 @@ async function upsertMessage(
 
   const msg = msgRes.data;
   const headers = (msg.payload?.headers as Array<{ name: string; value: string }>) ?? [];
-  const { text: bodyText, html: bodyHtml } = extractBody(msg.payload as GooglePayload);
+  const { text: extractedText, html: bodyHtml } = extractBody(msg.payload as GooglePayload);
+  const bodyText = extractedText.trim() ? extractedText : htmlToText(bodyHtml);
 
   const fromAddr = getHeader(headers, 'from');
   const toStr = getHeader(headers, 'to');
@@ -264,8 +265,27 @@ async function upsertMessage(
   const ccAddresses = ccStr ? ccStr.split(',').map((s) => s.trim()).filter(Boolean) : [];
   const date = dateStr ? new Date(dateStr).toISOString() : new Date().toISOString();
 
-  // Upsert message
-  await supabaseAdmin.from('email_messages').upsert({
+  // Upsert thread first (satisfies foreign key constraint for messages)
+  const participants = [
+    ...toAddresses.map((e) => ({ email: e })),
+    { email: fromAddr },
+  ].filter((p, i, arr) => arr.findIndex((x) => x.email === p.email) === i);
+
+  const { error: threadError } = await supabaseAdmin.from('email_threads').upsert({
+    id: threadId,
+    gmail_account_id: gmailAccountId,
+    subject,
+    participants,
+    last_message_date: date,
+    labels: msg.labelIds ?? [],
+  }, {
+    onConflict: 'id',
+    ignoreDuplicates: false,
+  });
+  if (threadError) console.error('Thread upsert error:', threadError);
+
+  // Upsert message second
+  const { error: msgError } = await supabaseAdmin.from('email_messages').upsert({
     id: messageId,
     thread_id: threadId,
     from_address: fromAddr,
@@ -278,24 +298,7 @@ async function upsertMessage(
     labels: msg.labelIds ?? [],
     raw: { id: msg.id, threadId: msg.threadId, snippet: msg.snippet },
   }, { onConflict: 'id' });
-
-  // Upsert thread (minimal — summary/embedding set later)
-  const participants = [
-    ...toAddresses.map((e) => ({ email: e })),
-    { email: fromAddr },
-  ].filter((p, i, arr) => arr.findIndex((x) => x.email === p.email) === i);
-
-  await supabaseAdmin.from('email_threads').upsert({
-    id: threadId,
-    gmail_account_id: gmailAccountId,
-    subject,
-    participants,
-    last_message_date: date,
-    labels: msg.labelIds ?? [],
-  }, {
-    onConflict: 'id',
-    ignoreDuplicates: false,
-  });
+  if (msgError) console.error('Message upsert error:', msgError);
 }
 
 // ─────────────────────────────────────────────────────────────
