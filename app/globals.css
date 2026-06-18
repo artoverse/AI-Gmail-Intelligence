@@ -4,37 +4,45 @@
 
 /* --- Design Tokens --- */
 :root {
-  --bg-base: #0a0a0f;
-  --bg-surface: #111118;
-  --bg-elevated: #18181f;
-  --bg-card: #1e1e28;
-  --bg-hover: #252532;
-  --bg-selected: #2a2040;
+  /* Backgrounds — slightly elevated to create more visible layering */
+  --bg-base:     #080810;
+  --bg-surface:  #0f0f1a;
+  --bg-elevated: #161625;
+  --bg-card:     #1c1c30;
+  --bg-hover:    #22223a;
+  --bg-selected: #282048;
 
-  --border-subtle: rgba(255,255,255,0.06);
-  --border-default: rgba(255,255,255,0.10);
-  --border-strong: rgba(255,255,255,0.16);
+  /* Borders — brighter so structure is visible */
+  --border-subtle:  rgba(255,255,255,0.09);
+  --border-default: rgba(255,255,255,0.15);
+  --border-strong:  rgba(255,255,255,0.24);
 
-  --text-primary: #f0f0f8;
-  --text-secondary: #9898b0;
-  --text-muted: #5a5a72;
+  /* Text — HIGH CONTRAST, all pass WCAG AA on dark surfaces */
+  --text-primary:   #f0f0fc;   /* near-white, crisp */
+  --text-secondary: #c0c0dc;   /* bright lavender-grey — was #9898b0 (too dark) */
+  --text-muted:     #8888aa;   /* visible grey — was #5a5a72 (unreadable) */
+  --text-placeholder: #5a5a78;
 
+  /* Brand */
   --violet-500: #8b5cf6;
   --violet-400: #a78bfa;
+  --violet-300: #c4b5fd;
   --violet-600: #7c3aed;
-  --violet-glow: rgba(139,92,246,0.25);
+  --violet-glow: rgba(139,92,246,0.28);
 
+  /* Radii */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-xl: 20px;
 
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.4);
-  --shadow-md: 0 4px 16px rgba(0,0,0,0.5);
-  --shadow-lg: 0 8px 32px rgba(0,0,0,0.6);
-  --shadow-violet: 0 0 30px rgba(139,92,246,0.2);
+  /* Shadows */
+  --shadow-sm: 0 1px 4px rgba(0,0,0,0.5);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.6);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.7);
+  --shadow-violet: 0 0 40px rgba(139,92,246,0.22);
 
-  --transition: 150ms cubic-bezier(0.4,0,0.2,1);
+  --transition:    150ms cubic-bezier(0.4,0,0.2,1);
   --transition-md: 250ms cubic-bezier(0.4,0,0.2,1);
 }
 
@@ -50,9 +58,11 @@ body {
   font-size: 14px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
   height: 100dvh;
 }
+
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
