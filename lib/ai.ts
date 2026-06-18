@@ -254,7 +254,8 @@ Answer the question based strictly on the email context above, citing sources:`;
 export async function* generateGroundedAnswerStream(
   query: string,
   retrievedThreads: (RetrievedThread & { content?: string })[],
-  chatHistory: ChatMessage[]
+  chatHistory: ChatMessage[],
+  inboxMeta?: { totalThreads: number; totalMessages: number }
 ): AsyncGenerator<string> {
   const client = getHfClient();
 
@@ -290,19 +291,26 @@ export async function* generateGroundedAnswerStream(
     ? 'No emails have been indexed yet. Please sync your Gmail first using the Sync button in the sidebar.'
     : '';
 
+  const inboxStats = inboxMeta
+    ? `Inbox stats: ${inboxMeta.totalThreads} total threads, ${inboxMeta.totalMessages} total messages synced.`
+    : '';
+
   const systemPrompt = retrievedThreads.length === 0
     ? `You are a Gmail AI assistant. ${noEmailsMsg}`
     : `You are an intelligent Gmail assistant. Answer questions using the email context below.
 
+${inboxStats}
+
 STRICT RULES:
 - Use [Source N] to cite where info came from
 - Answer directly and completely using ALL available sources
-- Never say "I only have N emails" — just answer with what you have
+- Use the inbox stats above for questions about total counts (e.g. "how many emails do I have")
+- The context below shows the ${retrievedThreads.length} most relevant emails for this query — NOT the total inbox
 - Be specific with dates, names, senders, and details
 - If info isn't in the context, say "I don't see that in your synced emails"
 - For "most recent" or "latest" questions, sort by Date and list them in order
 
-Email context (${retrievedThreads.length} emails):
+Email context (${retrievedThreads.length} most relevant emails):
 ━━━
 ${contextBlocks}
 ━━━`;

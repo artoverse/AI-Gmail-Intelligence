@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { chatWithEmails } from '@/lib/rag';
 import { type ChatMessage } from '@/lib/ai';
+import { supabaseAdmin } from '@/lib/supabase';
 
 // POST /api/chat
 // Body: { query: string; history: ChatMessage[]; userId?: string; gmailAccountId?: string }
@@ -11,6 +12,34 @@ export async function POST(request: NextRequest) {
 
     if (!query?.trim()) {
       return NextResponse.json({ error: 'query is required' }, { status: 400 });
+    }
+
+    // Fetch real inbox stats so the model knows actual totals
+    // (otherwise it guesses based on the 8 threads passed in context)
+    let inboxMeta: { totalThreads: number; totalMessages: number } | undefined;
+    if (gmailAccountId) {
+      const [{ count: threadCount }, { count: msgCount }] = await Promise.all([
+        supabaseAdmin
+          .from('email_threads')
+          .select('id', { count: 'exact', head: true })
+          .eq('gmail_account_id', gmailAccountId),
+        supabaseAdmin
+          .from('email_messages')
+          .select('id', { count: 'exact', head: true })
+          .in(
+            'thread_id',
+            (
+              await supabaseAdmin
+                .from('email_threads')
+                .select('id')
+                .eq('gmail_account_id', gmailAccountId)
+            ).data?.map((t) => t.id) ?? []
+          ),
+      ]);
+      inboxMeta = {
+        totalThreads: threadCount ?? 0,
+        totalMessages: msgCount ?? 0,
+      };
     }
 
     // Set up SSE stream
@@ -25,7 +54,7 @@ export async function POST(request: NextRequest) {
             })
           );
 
-          for await (const chunk of chatWithEmails(query, chatHistory, gmailAccountId)) {
+          for await (const chunk of chatWithEmails(query, chatHistory, gmailAccountId, inboxMeta)) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
           }
 

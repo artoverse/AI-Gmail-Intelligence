@@ -175,7 +175,8 @@ export async function hybridSearch(
 export async function* chatWithEmails(
   query: string,
   chatHistory: ChatMessage[],
-  gmailAccountId?: string
+  gmailAccountId?: string,
+  inboxMeta?: { totalThreads: number; totalMessages: number }
 ): AsyncGenerator<string> {
   // 1. Retrieve relevant threads (up to 10)
   const relevantThreads = await hybridSearch(query, gmailAccountId);
@@ -199,8 +200,8 @@ export async function* chatWithEmails(
   })));
   yield `__SOURCES__${sourcesJson}__SOURCES_END__`;
 
-  // 4. Stream grounded answer — pass ALL topThreads (with real content)
-  yield* generateGroundedAnswerStream(query, topThreads, chatHistory);
+  // 4. Stream grounded answer — pass ALL topThreads (with real content) + inbox meta
+  yield* generateGroundedAnswerStream(query, topThreads, chatHistory, inboxMeta);
 }
 
 // ─────────────────────────────────────────────────────────────
