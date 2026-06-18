@@ -1,0 +1,46 @@
+# render.yaml — Render deployment blueprint
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: gmail-ai
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      # ── Supabase ───────────────────────────────────────────────
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false   # set in Render dashboard
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+      # ── Google OAuth (Gmail API) ────────────────────────────────
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+
+      # ── App URL — MUST be your Render URL after first deploy ────
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false   # e.g. https://gmail-ai.onrender.com
+
+      # ── AI Services ─────────────────────────────────────────────
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: NVIDIA_NIM_API_KEY
+        sync: false
+      - key: NVIDIA_NIM_API_BASE
+        value: https://integrate.api.nvidia.com/v1
+      - key: NVIDIA_NIM_EMBED_MODEL
+        value: nvidia/nv-embedqa-e5-v5
+
+      # ── Node env ─────────────────────────────────────────────────
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "20"
