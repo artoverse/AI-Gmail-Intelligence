@@ -121,9 +121,13 @@ export async function recentThreads(
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Hybrid Search (vector + keyword + recency fallback)
-// ─────────────────────────────────────────────────────────────
+// ─── Recency keywords — skip vector search, just sort by date ────
+const RECENCY_TERMS = ['recent', 'latest', 'newest', 'today', 'new', 'last', 'just', 'now'];
+
+function isRecencyQuery(query: string): boolean {
+  const lower = query.toLowerCase();
+  return RECENCY_TERMS.some((t) => lower.includes(t));
+}
 
 export async function hybridSearch(
   query: string,
@@ -132,27 +136,33 @@ export async function hybridSearch(
   // Safety guard: never search across all accounts (prevents cross-user data leaks)
   if (!gmailAccountId) return [];
 
-  // Try vector search first
+  // Always fetch the 5 most recent threads to ground the assistant in current reality
+  // (new emails won't have embeddings yet, so vector search misses them)
+  const recent = await recentThreads(gmailAccountId, 5);
+
+  // For recency-based queries ("what are my recent emails?") just return date-sorted results
+  if (isRecencyQuery(query)) {
+    return recentThreads(gmailAccountId, 10);
+  }
+
+  // Try vector search
   const vectorResults = await semanticSearch(query, gmailAccountId, {
-    matchThreshold: 0.5,
+    matchThreshold: 0.45,
     matchCount: 8,
   });
 
-  if (vectorResults.length >= 3) return vectorResults;
+  // Keyword search in parallel
+  const keywordResults = await keywordSearch(query, gmailAccountId, 6);
 
-  // Fallback to keyword search
-  const keywordResults = await keywordSearch(query, gmailAccountId, 8);
+  // Merge: vector first, then keyword, then recent — deduplicated
+  const seen = new Set<string>();
+  const combined: RetrievedThread[] = [];
 
-  // Deduplicate
-  const seen = new Set(vectorResults.map((r) => r.id));
-  const combined = [
-    ...vectorResults,
-    ...keywordResults.filter((r) => !seen.has(r.id)),
-  ];
-
-  // If still no results, return recent threads so the assistant has context
-  if (combined.length === 0) {
-    return recentThreads(gmailAccountId, 6);
+  for (const r of [...vectorResults, ...keywordResults, ...recent]) {
+    if (!seen.has(r.id)) {
+      seen.add(r.id);
+      combined.push(r);
+    }
   }
 
   return combined.slice(0, 10);
