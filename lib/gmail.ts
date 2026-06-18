@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
 import { supabaseAdmin } from './supabase';
+import { htmlToText } from './utils';
 
 // ─────────────────────────────────────────────────────────────
 // OAuth2 Client Factory
