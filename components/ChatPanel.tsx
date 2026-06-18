@@ -65,6 +65,9 @@ export default function ChatPanel({ gmailAccountId, onSelectThread, onToggle }: 
 
     setMessages((prev) => [...prev, userMessage, assistantMessage]);
     setInput('');
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+    }
     setIsLoading(true);
 
     try {
@@ -338,11 +341,17 @@ export default function ChatPanel({ gmailAccountId, onSelectThread, onToggle }: 
             className="chat-input"
             placeholder="Ask about your emails..."
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              // Auto-resize
+              e.target.style.height = 'auto';
+              e.target.style.height = `${Math.min(e.target.scrollHeight, 150)}px`;
+            }}
             onKeyDown={handleKeyDown}
             rows={1}
             id="chat-input"
             disabled={isLoading}
+            style={{ minHeight: '44px', resize: 'none', overflowY: 'auto' }}
           />
           <button
             className="chat-send-btn"
