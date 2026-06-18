@@ -74,13 +74,14 @@ export default function EmailView({ thread, userId, userEmail }: EmailViewProps)
   }, [thread?.id]);
 
   const handleSummarize = async () => {
-    if (!thread || summary) return;
+    if (!thread) return;
     setIsSummarizing(true);
     try {
       const res = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ threadId: thread.id, action: 'summarize' }),
+        // Pass force: true so we skip the cache if we are re-summarizing
+        body: JSON.stringify({ threadId: thread.id, action: 'summarize', force: true }),
       });
       const data = await res.json();
       if (data.summary) setSummary(data.summary);
@@ -146,7 +147,7 @@ export default function EmailView({ thread, userId, userEmail }: EmailViewProps)
           {thread.last_message_date && (
             <div className="email-meta-item">
               <Calendar size={12} />
-              <span>{new Date(thread.last_message_date).toLocaleDateString('en-US', {
+              <span>{new Date(thread.last_message_date).toLocaleDateString(undefined, {
                 weekday: 'short', year: 'numeric', month: 'short', day: 'numeric'
               })}</span>
             </div>
@@ -162,7 +163,7 @@ export default function EmailView({ thread, userId, userEmail }: EmailViewProps)
           <button
             className="action-btn action-btn-primary"
             onClick={handleSummarize}
-            disabled={isSummarizing || !!summary}
+            disabled={isSummarizing}
             id="summarize-btn"
           >
             {isSummarizing ? (
@@ -170,7 +171,7 @@ export default function EmailView({ thread, userId, userEmail }: EmailViewProps)
             ) : (
               <Sparkles size={14} />
             )}
-            {summary ? 'Summarized' : isSummarizing ? 'Summarizing...' : 'AI Summary'}
+            {summary ? 'Re-summarize' : isSummarizing ? 'Summarizing...' : 'AI Summary'}
           </button>
           <button
             className="action-btn"

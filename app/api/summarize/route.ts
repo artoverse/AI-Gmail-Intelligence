@@ -8,7 +8,7 @@ import { getThreadContext } from '@/lib/rag';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { threadId, action = 'summarize', instruction, userEmail } = body;
+    const { threadId, action = 'summarize', instruction, userEmail, force } = body;
 
     // ── draft_compose: compose a brand-new email from a prompt ──
     if (action === 'draft_compose') {
@@ -32,14 +32,14 @@ export async function POST(request: NextRequest) {
 
     // ── summarize ────────────────────────────────────────────────
     if (action === 'summarize') {
-      // Return cached summary if it exists
+      // Return cached summary if it exists and force is not true
       const { data: thread } = await supabaseAdmin
         .from('email_threads')
         .select('summary')
         .eq('id', threadId)
         .single();
 
-      if (thread?.summary) {
+      if (thread?.summary && !force) {
         return NextResponse.json({ summary: thread.summary });
       }
 
