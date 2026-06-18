@@ -209,14 +209,14 @@ export default function Sidebar({
             </div>
           )}
 
-          {/* Categorize button — shown when there are uncategorized threads */}
-          {connectedEmail && !allCategorized && (
+          {/* Categorize button — always visible when Gmail connected */}
+          {connectedEmail && (
             <button
               className={`sync-btn ${isCategorizing ? 'syncing' : ''}`}
               onClick={handleCategorize}
               disabled={isCategorizing || isSyncing}
               id="categorize-btn"
-              style={{ marginTop: 6 }}
+              style={{ marginTop: 6, opacity: allCategorized && !isCategorizing ? 0.75 : 1 }}
             >
               {isCategorizing ? (
                 <Loader2 size={14} className="animate-spin" />
@@ -227,16 +227,19 @@ export default function Sidebar({
                 ? 'Categorizing...'
                 : uncategorizedCount !== null && uncategorizedCount > 0
                   ? `Categorize (${uncategorizedCount} left)`
-                  : 'Categorize Emails'}
+                  : allCategorized
+                    ? `Re-categorize (${catStatus?.total ?? 0})`
+                    : 'Categorize Emails'}
             </button>
           )}
-          {allCategorized && (
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', marginTop: 4 }}>
-              ✅ All {catStatus?.total} emails categorized
+          {allCategorized && !isCategorizing && (
+            <p style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', marginTop: 2 }}>
+              ✅ All {catStatus?.total} categorized
             </p>
           )}
         </div>
       )}
+
 
       {/* Category Navigation */}
       <nav className="category-nav">
