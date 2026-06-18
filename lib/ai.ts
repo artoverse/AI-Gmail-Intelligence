@@ -258,33 +258,54 @@ export async function* generateGroundedAnswerStream(
 ): AsyncGenerator<string> {
   const client = getHfClient();
 
+  // Build rich context blocks — prefer actual message content over summaries
   const contextBlocks = retrievedThreads
     .map(
-      (t, i) =>
-        `[Source ${i + 1}] Thread: "${t.subject ?? 'No Subject'}" (${t.last_message_date ? new Date(t.last_message_date).toLocaleDateString() : 'unknown date'})\n` +
-        `Summary: ${t.summary ?? 'No summary available'}\n` +
-        `Content:\n${t.content ?? 'No content available'}`
+      (t, i) => {
+        const date = t.last_message_date
+          ? new Date(t.last_message_date).toLocaleString('en-US', {
+              month: 'short', day: 'numeric', year: 'numeric',
+              hour: '2-digit', minute: '2-digit'
+            })
+          : 'unknown date';
+        const content = t.content?.trim() || t.summary || 'No content available';
+        return (
+          `[Source ${i + 1}]\n` +
+          `Subject: ${t.subject ?? 'No Subject'}\n` +
+          `Date: ${date}\n` +
+          `Content:\n${content.slice(0, 3000)}`
+        );
+      }
     )
-    .join('\n\n---\n\n');
+    .join('\n\n━━━\n\n');
 
-  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = chatHistory.map(m => ({
-    role: m.role === 'model' ? 'assistant' : 'user',
-    content: m.content
-  }));
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = chatHistory
+    .slice(-8)
+    .map(m => ({
+      role: m.role === 'model' ? 'assistant' : 'user',
+      content: m.content
+    }));
 
   const noEmailsMsg = retrievedThreads.length === 0
     ? 'No emails have been indexed yet. Please sync your Gmail first using the Sync button in the sidebar.'
-    : 'No relevant emails found for this query.';
+    : '';
 
-  const systemPrompt = `You are an intelligent Gmail assistant. Answer questions using ONLY the provided email context.
+  const systemPrompt = retrievedThreads.length === 0
+    ? `You are a Gmail AI assistant. ${noEmailsMsg}`
+    : `You are an intelligent Gmail assistant. Answer questions using the email context below.
 
-Rules:
-- Cite sources with [Source N] notation
-- If answer isn't in context, say so clearly
-- Be specific with dates, names, amounts
+STRICT RULES:
+- Use [Source N] to cite where info came from
+- Answer directly and completely using ALL available sources
+- Never say "I only have N emails" — just answer with what you have
+- Be specific with dates, names, senders, and details
+- If info isn't in the context, say "I don't see that in your synced emails"
+- For "most recent" or "latest" questions, sort by Date and list them in order
 
-Email context:
-${contextBlocks || noEmailsMsg}`;
+Email context (${retrievedThreads.length} emails):
+━━━
+${contextBlocks}
+━━━`;
 
   messages.unshift({ role: 'system', content: systemPrompt });
   messages.push({ role: 'user', content: query });
@@ -293,7 +314,8 @@ ${contextBlocks || noEmailsMsg}`;
     model: HF_MODEL,
     messages,
     stream: true,
-    max_tokens: 1000,
+    max_tokens: 1500,
+    temperature: 0.2,  // low temp = more accurate, less hallucination
   });
 
   for await (const chunk of stream) {

@@ -177,18 +177,20 @@ export async function* chatWithEmails(
   chatHistory: ChatMessage[],
   gmailAccountId?: string
 ): AsyncGenerator<string> {
-  // 1. Retrieve relevant threads
+  // 1. Retrieve relevant threads (up to 10)
   const relevantThreads = await hybridSearch(query, gmailAccountId);
 
-  // 1.5 Fetch actual messages for the top 3 threads to ensure the assistant has real content, not just empty summaries
-  const topThreads = relevantThreads.slice(0, 3);
-  for (const thread of topThreads) {
-    const threadContent = await getThreadContext(thread.id);
-    // Attach the actual content to the thread object (we'll modify ai.ts to read this)
-    (thread as any).content = threadContent;
-  }
+  // 2. Fetch actual message content for top 8 threads
+  //    (was 3 before — that caused "only 3 emails in context" responses)
+  const topThreads = relevantThreads.slice(0, 8);
+  await Promise.all(
+    topThreads.map(async (thread) => {
+      const threadContent = await getThreadContext(thread.id);
+      (thread as any).content = threadContent;
+    })
+  );
 
-  // 2. Yield source metadata first as a special token
+  // 3. Yield source metadata first as a special token
   const sourcesJson = JSON.stringify(relevantThreads.map((t) => ({
     id: t.id,
     subject: t.subject,
@@ -197,8 +199,7 @@ export async function* chatWithEmails(
   })));
   yield `__SOURCES__${sourcesJson}__SOURCES_END__`;
 
-  // 3. Stream grounded answer
-  // We pass the subset of threads that have been enriched with actual content
+  // 4. Stream grounded answer — pass ALL topThreads (with real content)
   yield* generateGroundedAnswerStream(query, topThreads, chatHistory);
 }
 
