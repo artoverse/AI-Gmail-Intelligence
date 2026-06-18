@@ -40,15 +40,21 @@ export default function ThreadList({
     if (!gmailAccountId) return;
     setLoading(true);
 
+    // If 'All', do a left join to include uncategorized. Otherwise, do an inner join to filter.
+    const categorySelector = selectedCategory === 'All' 
+      ? 'email_categories(category, confidence)'
+      : 'email_categories!inner(category, confidence)';
+
     let query = supabase
       .from('email_threads')
-      .select(`
-        *,
-        email_categories(category, confidence)
-      `)
+      .select(`*, ${categorySelector}`)
       .eq('gmail_account_id', gmailAccountId)
       .order('last_message_date', { ascending: false })
       .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+
+    if (selectedCategory !== 'All') {
+      query = query.eq('email_categories.category', selectedCategory);
+    }
 
     const { data, error } = await query;
     if (error) {
@@ -57,14 +63,14 @@ export default function ThreadList({
       return;
     }
 
-    const enriched = (data ?? []).map((t: EmailThread & { email_categories?: Array<{category: string; confidence: number}> }) => ({
+    const enriched = (data ?? []).map((t: any) => ({
       ...t,
-      category: t.email_categories?.[0]?.category ?? undefined,
+      category: t.email_categories?.[0]?.category ?? t.email_categories?.category ?? undefined,
     })) as (EmailThread & { category?: string })[];
 
     setThreads((prev) => (page === 0 ? enriched : [...prev, ...enriched]));
     setLoading(false);
-  }, [gmailAccountId, page]);
+  }, [gmailAccountId, page, selectedCategory]);
 
   useEffect(() => {
     setPage(0);
@@ -141,15 +147,8 @@ export default function ThreadList({
 
   const displayThreads = searchResults !== null ? searchResults : threads;
 
-  const filteredThreads =
-    selectedCategory === 'All'
-      ? displayThreads
-      : displayThreads.filter((t) => {
-          // Support both exact match and case-insensitive match
-          const cat = t.category?.toLowerCase().trim();
-          const sel = selectedCategory.toLowerCase().trim();
-          return cat === sel;
-        });
+  // We no longer need client-side filtering because loadThreads uses Supabase to filter by category!
+  const filteredThreads = displayThreads;
 
   // Count per category for badge display
   const categoryCounts = threads.reduce((acc, t) => {
