@@ -38,6 +38,18 @@ export default function Sidebar({
   const [showSyncMenu, setShowSyncMenu] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
   const [catStatus, setCatStatus] = useState<{ total: number; categorized: number } | null>(null);
+  const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({});
+
+  // Load category counts
+  useEffect(() => {
+    if (!userId || !connectedEmail) return;
+    fetch(`/api/gmail/category-counts?userId=${userId}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.counts) setCategoryCounts(data.counts);
+      })
+      .catch(() => {});
+  }, [userId, connectedEmail, isCategorizing, threadCount]);
 
   // Load categorization progress on mount
   useEffect(() => {
@@ -255,9 +267,15 @@ export default function Sidebar({
               {cat === 'All' ? '📬' : CATEGORY_ICONS[cat] ?? '📧'}
             </span>
             <span className="category-btn-label">{cat}</span>
-            {selectedCategory === cat && (
-              <ChevronRight size={12} className="ml-auto opacity-60" />
-            )}
+            
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 10, opacity: 0.6, fontWeight: 500 }}>
+                {cat === 'All' ? threadCount : categoryCounts[cat] ?? 0}
+              </span>
+              {selectedCategory === cat && (
+                <ChevronRight size={12} className="opacity-60" />
+              )}
+            </div>
           </button>
         ))}
       </nav>
