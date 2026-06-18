@@ -64,7 +64,8 @@ export default function Sidebar({
         const res = await fetch('/api/gmail/categorize', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId, page }),
+          // reset=true on page 0 clears all wrong old categories first
+          body: JSON.stringify({ userId, page, reset: page === 0 }),
         });
 
         const data = await res.json();
