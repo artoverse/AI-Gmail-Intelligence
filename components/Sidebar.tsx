@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { RefreshCw, Mail, LogOut, ChevronRight, Wifi, WifiOff, Menu } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { RefreshCw, Mail, LogOut, ChevronRight, Wifi, Tag, Menu, Loader2 } from 'lucide-react';
 import { CATEGORY_ICONS, CATEGORY_COLORS, formatRelativeDate } from '@/lib/utils';
 
 const CATEGORIES = ['All', 'Newsletter', 'Job', 'Finance', 'Notification', 'Personal', 'Work', 'Other'] as const;
@@ -36,6 +36,51 @@ export default function Sidebar({
   onToggle,
 }: SidebarProps) {
   const [showSyncMenu, setShowSyncMenu] = useState(false);
+  const [isCategorizing, setIsCategorizing] = useState(false);
+  const [catStatus, setCatStatus] = useState<{ total: number; categorized: number } | null>(null);
+
+  // Load categorization progress on mount
+  useEffect(() => {
+    if (!userId || !connectedEmail) return;
+    fetch(`/api/gmail/categorize?userId=${userId}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.total !== undefined) {
+          setCatStatus({ total: data.total, categorized: data.categorized });
+        }
+      })
+      .catch(() => {});
+  }, [userId, connectedEmail, isCategorizing]);
+
+  const handleCategorize = async () => {
+    if (!userId || isCategorizing) return;
+    setIsCategorizing(true);
+    try {
+      const res = await fetch('/api/gmail/categorize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCatStatus((prev) => ({
+          total: prev?.total ?? 0,
+          categorized: (prev?.categorized ?? 0) + (data.ruleCategorized ?? 0) + (data.llmCategorized ?? 0),
+        }));
+        // If there's more to categorize, auto-run again after a short delay
+        if (data.remaining > 0) {
+          setTimeout(() => handleCategorize(), 2000);
+        }
+      }
+    } catch (err) {
+      console.error('Categorize error:', err);
+    } finally {
+      setIsCategorizing(false);
+    }
+  };
+
+  const uncategorizedCount = catStatus ? catStatus.total - catStatus.categorized : null;
+  const allCategorized = catStatus && uncategorizedCount !== null && uncategorizedCount <= 0;
 
   return (
     <aside className="sidebar">
@@ -130,6 +175,33 @@ export default function Sidebar({
                 </div>
               </button>
             </div>
+          )}
+
+          {/* Categorize button — shown when there are uncategorized threads */}
+          {connectedEmail && !allCategorized && (
+            <button
+              className={`sync-btn ${isCategorizing ? 'syncing' : ''}`}
+              onClick={handleCategorize}
+              disabled={isCategorizing || isSyncing}
+              id="categorize-btn"
+              style={{ marginTop: 6 }}
+            >
+              {isCategorizing ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Tag size={14} />
+              )}
+              {isCategorizing
+                ? 'Categorizing...'
+                : uncategorizedCount !== null && uncategorizedCount > 0
+                  ? `Categorize (${uncategorizedCount} left)`
+                  : 'Categorize Emails'}
+            </button>
+          )}
+          {allCategorized && (
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', marginTop: 4 }}>
+              ✅ All {catStatus?.total} emails categorized
+            </p>
           )}
         </div>
       )}

@@ -161,8 +161,20 @@ export default function HomePage() {
       const data = await res.json();
 
       if (data.success) {
-        showToast('success', `Synced ${data.synced} emails, processed ${data.processed} threads`);
+        showToast('success', `Synced ${data.synced} emails — categorizing in background...`);
         await loadGmailAccount(user.id);
+
+        // Auto-trigger categorization in background after sync
+        // (non-blocking — runs separately after sync is done)
+        fetch('/api/gmail/categorize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: user.id }),
+        }).then((r) => r.json()).then((catData) => {
+          if (catData.ruleCategorized || catData.llmCategorized) {
+            showToast('success', `Categorized ${(catData.ruleCategorized ?? 0) + (catData.llmCategorized ?? 0)} threads`);
+          }
+        }).catch(() => {});
       } else {
         showToast('error', data.error ?? 'Sync failed');
       }
@@ -173,6 +185,7 @@ export default function HomePage() {
       setSyncProgress(undefined);
     }
   };
+
 
   const handleLogout = async () => {
     // Clear all local state immediately for instant UI feedback
