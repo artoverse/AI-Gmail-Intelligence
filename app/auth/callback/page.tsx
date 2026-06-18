@@ -4,7 +4,6 @@ import { Suspense, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
-// Spinner shown while loading / exchanging code
 function Spinner() {
   return (
     <div style={{
@@ -28,42 +27,41 @@ function Spinner() {
   );
 }
 
-// Inner component that reads searchParams — must be inside <Suspense>
 function CallbackHandler() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    const handle = async () => {
-      const code = searchParams.get('code');
-      const next = searchParams.get('next') ?? '/';
+    const next = searchParams.get('next') ?? '/';
 
-      if (code) {
-        const { error } = await supabase.auth.exchangeCodeForSession(code);
-        if (error) {
-          console.error('Auth callback error:', error.message);
-          router.replace(`/?error=${encodeURIComponent(error.message)}`);
-          return;
+    // With implicit flow, Supabase automatically detects the session
+    // from the URL hash (#access_token=...) when the client initialises.
+    // We just need to wait for the SIGNED_IN event, then navigate.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event) => {
+        if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+          subscription.unsubscribe();
+          router.replace(next);
         }
       }
+    );
 
-      // Session now stored in browser localStorage — navigate to app
-      router.replace(next);
+    // Safety: if no auth event fires within 5 seconds, go home anyway
+    const timeout = setTimeout(() => {
+      subscription.unsubscribe();
+      router.replace('/');
+    }, 5000);
+
+    return () => {
+      clearTimeout(timeout);
+      subscription.unsubscribe();
     };
-
-    handle();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return <Spinner />;
 }
 
-/**
- * Supabase PKCE auth callback page.
- *
- * useSearchParams() requires a Suspense boundary in Next.js App Router,
- * so CallbackHandler is wrapped in <Suspense> below.
- */
 export default function AuthCallbackPage() {
   return (
     <Suspense fallback={<Spinner />}>
