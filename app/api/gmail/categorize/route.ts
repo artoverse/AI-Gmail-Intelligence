@@ -235,7 +235,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Step 4: Rule-based categorize (instant, no API calls) ──
-    const toUpsert = todo.map((thread) => {
+    const toInsert = todo.map((thread) => {
       const msg = msgByThread.get(thread.id);
       const category = ruleBasedCategory(
         thread.subject ?? '',
@@ -245,17 +245,38 @@ export async function POST(request: NextRequest) {
       return { thread_id: thread.id, category, confidence: category === 'Other' ? 0.5 : 0.85 };
     });
 
-    // ── Step 5: BULK upsert — ONE DB call for all 50 rows ──────
-    const { error: upsertErr } = await supabaseAdmin
-      .from('email_categories')
-      .upsert(toUpsert, { onConflict: 'thread_id' });
+    // ── Step 5: DELETE existing rows for this batch, then INSERT fresh ──
+    // (email_categories.thread_id has no UNIQUE constraint so upsert fails;
+    //  DELETE+INSERT is the safe alternative that works without schema changes)
+    if (todoIds.length > 0) {
+      const { error: delErr } = await supabaseAdmin
+        .from('email_categories')
+        .delete()
+        .in('thread_id', todoIds);
 
-    if (upsertErr) throw upsertErr;
+      if (delErr) {
+        console.error('Delete error (non-fatal):', delErr.message);
+        // Continue anyway — worst case we get duplicates, not a failure
+      }
+    }
+
+    const { error: insertErr } = await supabaseAdmin
+      .from('email_categories')
+      .insert(toInsert);
+
+    if (insertErr) {
+      console.error('Insert error:', insertErr.message, insertErr.details);
+      return NextResponse.json({
+        error: insertErr.message,
+        done: false,
+        page,
+      }, { status: 500 });
+    }
 
     return NextResponse.json({
       success: true,
-      done: threads.length < BATCH_SIZE, // true when last page
-      categorized: toUpsert.length,
+      done: threads.length < BATCH_SIZE,
+      categorized: toInsert.length,
       page,
       elapsed: Math.round((Date.now() - startTime) / 1000) + 's',
     });

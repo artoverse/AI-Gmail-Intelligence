@@ -54,13 +54,17 @@ CREATE TABLE IF NOT EXISTS email_messages (
 
 CREATE TABLE IF NOT EXISTS email_categories (
   id          serial PRIMARY KEY,
-  thread_id   text REFERENCES email_threads(id) ON DELETE CASCADE,
+  thread_id   text UNIQUE REFERENCES email_threads(id) ON DELETE CASCADE,
   category    text CHECK (category IN (
     'Newsletter','Job','Finance','Notification','Personal','Work','Other'
   )),
   confidence  float,
   created_at  timestamp with time zone DEFAULT now()
 );
+
+-- IMPORTANT: If you already ran the schema without UNIQUE, run this in SQL editor:
+-- ALTER TABLE email_categories ADD CONSTRAINT email_categories_thread_id_key UNIQUE (thread_id);
+
 
 -- ============================================================
 -- INDEXES
