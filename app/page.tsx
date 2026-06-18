@@ -81,15 +81,20 @@ export default function HomePage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
 
-    // Only process ?connected=true once we have a user — otherwise user is null
-    // and loadGmailAccount won't run. The URL stays until user is set, then we act.
     if (params.get('connected') === 'true' && user) {
       window.history.replaceState({}, '', '/');
       showToast('success', 'Gmail connected successfully!');
-      loadGmailAccount(user.id);
+
+      // Retry up to 6x — the OAuth callback write to Supabase may not be done yet
+      const retryLoad = async (userId: string, attempts = 0) => {
+        const found = await loadGmailAccount(userId);
+        if (!found && attempts < 5) {
+          setTimeout(() => retryLoad(userId, attempts + 1), 1500);
+        }
+      };
+      retryLoad(user.id);
     }
 
-    // Error params can always be shown immediately
     if (params.get('error')) {
       showToast('error', `Connection failed: ${params.get('error')}`);
       window.history.replaceState({}, '', '/');
@@ -97,7 +102,7 @@ export default function HomePage() {
   }, [user]);
 
 
-  const loadGmailAccount = async (userId: string) => {
+  const loadGmailAccount = async (userId: string): Promise<boolean> => {
     const { data } = await supabase
       .from('gmail_accounts')
       .select('id, email_address, last_synced')
@@ -115,7 +120,9 @@ export default function HomePage() {
         .select('id', { count: 'exact', head: true })
         .eq('gmail_account_id', data.id);
       setThreadCount(count ?? 0);
+      return true;
     }
+    return false;
   };
 
   const handleGoogleSignIn = async () => {
@@ -161,9 +168,19 @@ export default function HomePage() {
   };
 
   const handleLogout = async () => {
+    // Clear all local state immediately for instant UI feedback
+    setUser(null);
+    setConnectedEmail(null);
+    setGmailAccountId(null);
+    setSelectedThread(null);
+    setThreadCount(0);
+    setToasts([]);
+
+    // Sign out from Supabase
     await supabase.auth.signOut();
-    // Reload the page to fully clear all state
-    window.location.reload();
+
+    // Hard navigation clears all session cookies + localStorage on Render
+    window.location.href = '/';
   };
 
   const handleSelectThreadFromChat = useCallback(

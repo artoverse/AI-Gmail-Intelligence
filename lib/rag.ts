@@ -129,6 +129,9 @@ export async function hybridSearch(
   query: string,
   gmailAccountId?: string
 ): Promise<RetrievedThread[]> {
+  // Safety guard: never search across all accounts (prevents cross-user data leaks)
+  if (!gmailAccountId) return [];
+
   // Try vector search first
   const vectorResults = await semanticSearch(query, gmailAccountId, {
     matchThreshold: 0.5,
