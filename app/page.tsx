@@ -48,12 +48,17 @@ export default function HomePage() {
   // Initialize auth
   useEffect(() => {
     const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        setUser({ id: session.user.id, email: session.user.email });
-        await loadGmailAccount(session.user.id);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          setUser({ id: session.user.id, email: session.user.email });
+          await loadGmailAccount(session.user.id);
+        }
+      } catch (err) {
+        console.error('App init error:', err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     init();
