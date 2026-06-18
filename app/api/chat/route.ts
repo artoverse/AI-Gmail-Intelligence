@@ -25,16 +25,8 @@ export async function POST(request: NextRequest) {
           .eq('gmail_account_id', gmailAccountId),
         supabaseAdmin
           .from('email_messages')
-          .select('id', { count: 'exact', head: true })
-          .in(
-            'thread_id',
-            (
-              await supabaseAdmin
-                .from('email_threads')
-                .select('id')
-                .eq('gmail_account_id', gmailAccountId)
-            ).data?.map((t) => t.id) ?? []
-          ),
+          .select('email_threads!inner(id)', { count: 'exact', head: true })
+          .eq('email_threads.gmail_account_id', gmailAccountId),
       ]);
       inboxMeta = {
         totalThreads: threadCount ?? 0,
