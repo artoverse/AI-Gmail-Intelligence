@@ -47,34 +47,38 @@ export default function HomePage() {
 
   // Initialize auth
   useEffect(() => {
-    const init = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user) {
-          setUser({ id: session.user.id, email: session.user.email });
-          await loadGmailAccount(session.user.id);
+    // Safety net: if auth state never fires, unblock the UI after 6 seconds
+    const timeout = setTimeout(() => setLoading(false), 6000);
+
+    // onAuthStateChange fires immediately with INITIAL_SESSION on first load.
+    // This is the single source of truth for auth state — no separate getSession() needed.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
+          if (session?.user) {
+            setUser({ id: session.user.id, email: session.user.email });
+            try {
+              await loadGmailAccount(session.user.id);
+            } catch (err) {
+              console.error('loadGmailAccount error:', err);
+            }
+          }
+          clearTimeout(timeout);
+          setLoading(false);
+        } else if (event === 'SIGNED_OUT') {
+          setUser(null);
+          setConnectedEmail(null);
+          setGmailAccountId(null);
+          clearTimeout(timeout);
+          setLoading(false);
         }
-      } catch (err) {
-        console.error('App init error:', err);
-      } finally {
-        setLoading(false);
       }
+    );
+
+    return () => {
+      clearTimeout(timeout);
+      subscription.unsubscribe();
     };
-
-    init();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session?.user) {
-        setUser({ id: session.user.id, email: session.user.email });
-        await loadGmailAccount(session.user.id);
-      } else if (event === 'SIGNED_OUT') {
-        setUser(null);
-        setConnectedEmail(null);
-        setGmailAccountId(null);
-      }
-    });
-
-    return () => subscription.unsubscribe();
   }, []);
 
   // Handle URL params after OAuth callback
