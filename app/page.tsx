@@ -19,7 +19,7 @@ type Toast = {
 export default function HomePage() {
   // Auth
   const [user, setUser] = useState<{ id: string; email: string | undefined } | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true); // start true — prevents auth screen flash before session loads
 
   // Gmail connection
   const [connectedEmail, setConnectedEmail] = useState<string | null>(null);
@@ -103,26 +103,31 @@ export default function HomePage() {
 
 
   const loadGmailAccount = async (userId: string): Promise<boolean> => {
-    const { data } = await supabase
-      .from('gmail_accounts')
-      .select('id, email_address, last_synced')
-      .eq('user_id', userId)
-      .single();
+    try {
+      // Use server-side API to bypass any RLS/session timing issues on Render
+      const res = await fetch(`/api/gmail/sync?userId=${userId}`);
+      if (!res.ok) return false;
+      const data = await res.json();
 
-    if (data) {
-      setConnectedEmail(data.email_address);
-      setGmailAccountId(data.id);
-      setLastSynced(data.last_synced);
+      if (data.connected && data.emailAddress) {
+        setConnectedEmail(data.emailAddress);
+        setLastSynced(data.lastSynced ?? null);
+        setThreadCount(data.threadCount ?? 0);
 
-      // Get thread count
-      const { count } = await supabase
-        .from('email_threads')
-        .select('id', { count: 'exact', head: true })
-        .eq('gmail_account_id', data.id);
-      setThreadCount(count ?? 0);
-      return true;
+        // Also get the gmail_account id for queries (still needed for ThreadList)
+        const { data: acct } = await supabase
+          .from('gmail_accounts')
+          .select('id')
+          .eq('user_id', userId)
+          .single();
+        if (acct?.id) setGmailAccountId(acct.id);
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error('loadGmailAccount error:', err);
+      return false;
     }
-    return false;
   };
 
   const handleGoogleSignIn = async () => {
