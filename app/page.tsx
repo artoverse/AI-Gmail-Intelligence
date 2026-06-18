@@ -77,19 +77,25 @@ export default function HomePage() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Handle URL params after OAuth callback
+  // Handle URL params after Gmail OAuth callback
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('connected') === 'true') {
-      showToast('success', 'Gmail connected successfully!');
+
+    // Only process ?connected=true once we have a user — otherwise user is null
+    // and loadGmailAccount won't run. The URL stays until user is set, then we act.
+    if (params.get('connected') === 'true' && user) {
       window.history.replaceState({}, '', '/');
-      if (user) loadGmailAccount(user.id);
+      showToast('success', 'Gmail connected successfully!');
+      loadGmailAccount(user.id);
     }
+
+    // Error params can always be shown immediately
     if (params.get('error')) {
       showToast('error', `Connection failed: ${params.get('error')}`);
       window.history.replaceState({}, '', '/');
     }
   }, [user]);
+
 
   const loadGmailAccount = async (userId: string) => {
     const { data } = await supabase
