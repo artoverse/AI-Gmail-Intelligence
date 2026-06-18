@@ -135,6 +135,8 @@ export async function syncGmailFull(
   let pageToken: string | undefined;
   let synced = 0;
   let lastHistoryId: string | null = null;
+  const MAX_PAGES = 2; // max 100 messages per sync to avoid Render 30s timeout
+  let pagesFetched = 0;
 
   do {
     const listRes = await withBackoff(() =>
@@ -147,6 +149,7 @@ export async function syncGmailFull(
 
     const messages = listRes.data.messages ?? [];
     pageToken = listRes.data.nextPageToken ?? undefined;
+    pagesFetched++;
 
     // Process in parallel batches of 10
     for (let i = 0; i < messages.length; i += 10) {
@@ -157,7 +160,7 @@ export async function syncGmailFull(
       synced += batch.length;
       onProgress?.(synced);
     }
-  } while (pageToken);
+  } while (pageToken && pagesFetched < MAX_PAGES);
 
   // Fetch profile for current historyId
   try {

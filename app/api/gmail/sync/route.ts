@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
 import { syncGmailFull, syncGmailIncremental } from '@/lib/gmail';
-import { categorizeEmail, embedPassage, summarizeThread } from '@/lib/ai';
-import { getThreadContext } from '@/lib/rag';
+import { categorizeEmail, embedPassage } from '@/lib/ai';
 import { htmlToText } from '@/lib/utils';
 
 // POST /api/gmail/sync
-// Body: { userId: string; gmailAccountId?: string; mode: 'full' | 'incremental' }
+// Body: { userId: string; mode: 'full' | 'incremental' }
+//
+// Render free tier has a 30-second request timeout. To avoid timeouts:
+// - Phase 1: Sync email messages from Gmail API (fast, just API calls + DB writes)
+// - Phase 2: AI categorization runs on ONLY 10 threads max, with a 20s budget check
+//   Summaries & embeddings are generated lazily when a thread is opened (see /api/summarize)
 export async function POST(request: NextRequest) {
+  const startTime = Date.now();
+
   try {
     const body = await request.json();
     const { userId, mode = 'incremental' } = body;
@@ -16,7 +22,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'userId required' }, { status: 400 });
     }
 
-    // Get gmail accounts for this user
+    // Get gmail account for this user
     const { data: accounts, error: accError } = await supabaseAdmin
       .from('gmail_accounts')
       .select('*')
@@ -29,7 +35,8 @@ export async function POST(request: NextRequest) {
     const account = accounts[0];
     const gmailAccountId = account.id;
 
-    // Step 1: Sync emails
+    // ── Phase 1: Sync emails from Gmail API ──────────────────────
+    // This is the only mandatory phase. Runs fast (parallel batches).
     let synced = 0;
     if (mode === 'full' || !account.history_id) {
       const result = await syncGmailFull(gmailAccountId);
@@ -39,85 +46,80 @@ export async function POST(request: NextRequest) {
       synced = result.synced;
     }
 
-    // Step 2: Process threads that don't have embeddings/summaries yet
-    const { data: unprocessedThreads } = await supabaseAdmin
-      .from('email_threads')
-      .select('id, subject, participants, labels')
-      .eq('gmail_account_id', gmailAccountId)
-      .is('embedding', null)
-      .order('last_message_date', { ascending: false })
-      .limit(50); // process up to 50 threads per sync
-
+    // ── Phase 2: AI categorization (time-boxed, best-effort) ─────
+    // Only categorize threads that don't have a category yet.
+    // We strictly limit to 10 threads and check the clock every thread
+    // to stay well within Render's 30s timeout.
     let processed = 0;
+    const AI_BUDGET_MS = 20_000; // stop AI work after 20s to leave buffer for response
 
-    if (unprocessedThreads?.length) {
-      // Process in batches of 5 to avoid rate limits
-      for (let i = 0; i < unprocessedThreads.length; i += 5) {
-        const batch = unprocessedThreads.slice(i, i + 5);
+    try {
+      const { data: uncategorized } = await supabaseAdmin
+        .from('email_threads')
+        .select(`
+          id, subject,
+          email_categories(category),
+          email_messages(from_address, body_text, body_html)
+        `)
+        .eq('gmail_account_id', gmailAccountId)
+        .order('last_message_date', { ascending: false })
+        .limit(10); // only 10 — avoids timeout
 
-        await Promise.allSettled(
-          batch.map(async (thread) => {
-            try {
-              // Get thread messages text
-              const threadText = await getThreadContext(thread.id);
-              if (!threadText) return;
+      if (uncategorized?.length) {
+        for (const thread of uncategorized) {
+          // Stop if we've used too much time
+          if (Date.now() - startTime > AI_BUDGET_MS) break;
 
-              // Get first message for categorization
-              const { data: firstMsg } = await supabaseAdmin
-                .from('email_messages')
-                .select('from_address, subject, body_text, body_html')
-                .eq('thread_id', thread.id)
-                .order('date', { ascending: true })
-                .limit(1)
-                .single();
+          // Skip if already categorized
+          const cats = (thread as any).email_categories;
+          if (cats?.length > 0) continue;
 
-              const bodyText = firstMsg?.body_text ||
-                htmlToText(firstMsg?.body_html ?? '').slice(0, 500);
+          const msgs = (thread as any).email_messages ?? [];
+          const firstMsg = msgs[0];
+          if (!firstMsg) continue;
 
-              // Parallel: summarize + categorize + embed
-              const [summary, category, embedding] = await Promise.all([
-                summarizeThread(threadText).catch(() => null),
-                categorizeEmail(
-                  thread.subject ?? '',
-                  firstMsg?.from_address ?? '',
-                  bodyText
-                ).catch(() => null),
-                embedPassage(`${thread.subject ?? ''}\n${bodyText}`).catch(() => null),
-              ]);
+          const bodyText = (
+            firstMsg.body_text ||
+            htmlToText(firstMsg.body_html ?? '')
+          ).slice(0, 500);
 
-              // Update thread with summary + embedding
+          try {
+            const [category, embedding] = await Promise.all([
+              categorizeEmail(
+                thread.subject ?? '',
+                firstMsg.from_address ?? '',
+                bodyText
+              ).catch(() => null),
+              embedPassage(`${thread.subject ?? ''}\n${bodyText}`).catch(() => null),
+            ]);
+
+            if (category) {
+              await supabaseAdmin.from('email_categories').upsert(
+                {
+                  thread_id: thread.id,
+                  category: category.category,
+                  confidence: category.confidence,
+                },
+                { onConflict: 'thread_id' }
+              );
+            }
+
+            if (embedding) {
               await supabaseAdmin
                 .from('email_threads')
-                .update({
-                  summary: summary ?? null,
-                  embedding: embedding ?? null,
-                })
+                .update({ embedding })
                 .eq('id', thread.id);
-
-              // Store category
-              if (category) {
-                await supabaseAdmin.from('email_categories').upsert(
-                  {
-                    thread_id: thread.id,
-                    category: category.category,
-                    confidence: category.confidence,
-                  },
-                  { onConflict: 'thread_id' }
-                );
-              }
-
-              processed++;
-            } catch (err) {
-              console.error(`Error processing thread ${thread.id}:`, err);
             }
-          })
-        );
 
-        // Small delay between batches
-        if (i + 5 < unprocessedThreads.length) {
-          await new Promise((r) => setTimeout(r, 1000));
+            processed++;
+          } catch (err) {
+            console.error(`AI processing failed for thread ${thread.id}:`, err);
+          }
         }
       }
+    } catch (aiErr) {
+      // AI phase is best-effort — don't fail the whole sync
+      console.warn('AI phase skipped due to error:', aiErr);
     }
 
     return NextResponse.json({
@@ -125,6 +127,7 @@ export async function POST(request: NextRequest) {
       synced,
       processed,
       mode,
+      elapsed: Math.round((Date.now() - startTime) / 1000) + 's',
     });
   } catch (err) {
     console.error('Sync error:', err);
