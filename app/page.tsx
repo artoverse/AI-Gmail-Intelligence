@@ -163,6 +163,7 @@ export default function HomePage() {
       if (data.success) {
         showToast('success', `Synced ${data.synced} emails — categorizing in background...`);
         await loadGmailAccount(user.id);
+        setSelectedCategory('All'); // Automatically snap to 'All' to show new emails
 
         // Auto-trigger categorization in background after sync
         // (non-blocking — runs separately after sync is done)
