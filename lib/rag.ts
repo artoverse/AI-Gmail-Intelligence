@@ -48,10 +48,13 @@ export async function keywordSearch(
   gmailAccountId?: string,
   limit = 8
 ): Promise<RetrievedThread[]> {
+  // Filter out common conversational stop words to find actual meaningful keywords
+  const stopWords = new Set(['the', 'what', 'about', 'then', 'how', 'many', 'can', 'you', 'access', 'right', 'now', 'are', 'is', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'and', 'or', 'my', 'me', 'i', 'show', 'find', 'get', 'tell', 'about', 'mail', 'email', 'emails', 'message', 'messages', 'this', 'that', 'these', 'those']);
+  
   const searchTerms = query
     .toLowerCase()
-    .split(/\s+/)
-    .filter((w) => w.length > 2)
+    .split(/[^a-z0-9.-]+/) // split by non-alphanumeric (keep dots for domains)
+    .filter((w) => w.length > 2 && !stopWords.has(w))
     .slice(0, 5);
 
   try {
