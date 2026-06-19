@@ -151,23 +151,23 @@ export async function summarizeThread(threadText: string): Promise<string> {
       },
       {
         role: 'user',
-        content: `Summarize this email thread using this exact format:
+        content: `Summarize this email thread in a crisp, professional tone similar to official Gmail summaries.
 
-**Topic**: [One sentence]
+**Topic**: [One clear sentence]
 
 **Key Points**:
-• [Point 1]
-• [Point 2]
-• [Point 3 if relevant]
+• [Brief point 1]
+• [Brief point 2]
+• [Brief point 3 if relevant]
 
-**Action Items**: [Specific tasks/deadlines, or "None"]
-
-**Outcome**: [Decision made or "Pending"]
+(Only include the following if applicable. Omit completely if there are no action items or if the outcome is pending.)
+**Action Items**: [Specific tasks/deadlines]
+**Outcome**: [Clear decision made]
 
 Email thread:
 ${truncated}
 
-Write the summary now (max 200 words):`,
+Write the summary now (max 150 words):`,
       },
     ],
     max_tokens: 400,
