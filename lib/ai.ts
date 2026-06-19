@@ -36,13 +36,12 @@ function getModelId(): string {
     return process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
   }
   if (provider === 'huggingface') {
-    const hfModel = process.env.HF_MODEL ?? 'meta-llama/Llama-3.3-70B-Instruct';
-    // Remap models too large for HF free tier
-    if (hfModel.includes('DeepSeek-R1') && !hfModel.includes('Distill')) {
-      return 'meta-llama/Llama-3.3-70B-Instruct';
-    }
-    if (hfModel.includes('405B') || hfModel.includes('405b')) {
-      return 'meta-llama/Llama-3.3-70B-Instruct';
+    const hfModel = process.env.HF_MODEL ?? 'meta-llama/Llama-3.2-3B-Instruct';
+    // Remap models too large for HF free tier (this causes 404s)
+    if (hfModel.includes('70B') || hfModel.includes('405B') || hfModel.includes('DeepSeek-R1')) {
+      if (!hfModel.includes('Distill')) {
+        return 'meta-llama/Llama-3.2-3B-Instruct';
+      }
     }
     return hfModel;
   }
@@ -60,10 +59,9 @@ function getClient(): OpenAI {
         baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
       });
     } else if (provider === 'huggingface') {
-      const model = getModelId();
       _client = new OpenAI({
         apiKey: process.env.HF_TOKEN!,
-        baseURL: `https://api-inference.huggingface.co/models/${model}/v1/`,
+        baseURL: 'https://api-inference.huggingface.co/v1/',
       });
     } else {
       _client = new OpenAI({
