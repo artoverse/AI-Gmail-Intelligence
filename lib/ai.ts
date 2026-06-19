@@ -1,40 +1,77 @@
 import OpenAI from 'openai';
 
 // ─────────────────────────────────────────────────────────────
-// Client Init (lazy to avoid build-time errors)
+// Provider detection — Gemini preferred, then HF, then NVIDIA NIM
 // ─────────────────────────────────────────────────────────────
 
-let _hfClient: OpenAI | null = null;
-function getHfClient() {
-  if (!_hfClient) {
-    if (process.env.GEMINI_API_KEY) {
-      _hfClient = new OpenAI({
-        apiKey: process.env.GEMINI_API_KEY,
+type Provider = 'gemini' | 'huggingface' | 'nvidia';
+
+function getProvider(): Provider {
+  if (process.env.GEMINI_API_KEY) return 'gemini';
+  if (process.env.HF_TOKEN) return 'huggingface';
+  return 'nvidia';
+}
+
+function getModelId(): string {
+  const provider = getProvider();
+  if (provider === 'gemini') {
+    return process.env.GEMINI_MODEL ?? 'gemini-1.5-flash';
+  }
+  if (provider === 'huggingface') {
+    // For HF, use a distilled version of DeepSeek that works on free tier
+    // DeepSeek-R1 (full) is 671B — too large for HF serverless
+    // DeepSeek-R1-Distill-Llama-8B is fully supported on HF Inference API
+    const hfModel = process.env.HF_MODEL ?? 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B';
+    // If user set the huge R1 model, gracefully remap to distilled 8B
+    if (hfModel === 'deepseek-ai/DeepSeek-R1') {
+      return 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B';
+    }
+    return hfModel;
+  }
+  return process.env.NVIDIA_NIM_MODEL ?? 'meta/llama-3.1-8b-instruct';
+}
+
+let _client: OpenAI | null = null;
+function getClient(): OpenAI {
+  if (!_client) {
+    const provider = getProvider();
+    if (provider === 'gemini') {
+      _client = new OpenAI({
+        apiKey: process.env.GEMINI_API_KEY!,
         baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
       });
-    } else if (process.env.HF_TOKEN) {
-      _hfClient = new OpenAI({
-        apiKey: process.env.HF_TOKEN,
+    } else if (provider === 'huggingface') {
+      _client = new OpenAI({
+        apiKey: process.env.HF_TOKEN!,
         baseURL: 'https://api-inference.huggingface.co/v1/',
       });
     } else {
-      _hfClient = new OpenAI({
+      _client = new OpenAI({
         apiKey: process.env.NVIDIA_NIM_API_KEY!,
         baseURL: process.env.NVIDIA_NIM_API_BASE ?? 'https://integrate.api.nvidia.com/v1',
       });
     }
   }
-  return _hfClient;
+  return _client;
 }
 
-const HF_MODEL = process.env.GEMINI_API_KEY 
-  ? (process.env.GEMINI_MODEL ?? 'gemini-1.5-flash')
-  : (process.env.HF_MODEL ?? 'meta/llama-3.1-8b-instruct');
 const EMBED_MODEL = process.env.NVIDIA_NIM_EMBED_MODEL ?? 'nvidia/nv-embedqa-e5-v5';
 const NIM_BASE = process.env.NVIDIA_NIM_API_BASE ?? 'https://integrate.api.nvidia.com/v1';
 
 // ─────────────────────────────────────────────────────────────
-// Text Embedding (NVIDIA NIM) — using raw fetch for full control
+// DeepSeek / thinking model output cleaner
+// DeepSeek-R1 wraps reasoning in <think>…</think> — strip it
+// ─────────────────────────────────────────────────────────────
+function cleanResponse(text: string): string {
+  // Remove <think>...</think> blocks (DeepSeek chain-of-thought)
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<Think>[\s\S]*?<\/Think>/gi, '')
+    .trim();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Text Embedding (NVIDIA NIM) — always uses NIM for embeddings
 // ─────────────────────────────────────────────────────────────
 
 async function nimEmbed(text: string, inputType: 'query' | 'passage'): Promise<number[]> {
@@ -73,37 +110,49 @@ export async function embedPassage(text: string): Promise<number[]> {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Thread Summarization (Llama 3 via Hugging Face)
+// Thread Summarization
 // ─────────────────────────────────────────────────────────────
 
 export async function summarizeThread(threadText: string): Promise<string> {
-  const client = getHfClient();
-  const truncated = threadText.slice(0, 20_000); // Keep under Llama 3 context limits
+  const client = getClient();
+  const model = getModelId();
+  // Truncate to keep well within context limits
+  const truncated = threadText.slice(0, 12_000);
 
-  const prompt = `You are an expert email summarizer. Analyze this email thread and provide a concise summary.
+  const systemPrompt = `You are a professional email analyst. Your job is to produce concise, accurate email summaries.
+CRITICAL: Output ONLY the summary. Do NOT include any reasoning, thinking steps, or meta-commentary.`;
+
+  const userPrompt = `Summarize this email thread in the following structured format:
+
+**Topic**: [One sentence describing the main subject]
+**Key Points**:
+• [Point 1]
+• [Point 2]
+• [Point 3 if applicable]
+**Action Items**: [List any tasks or follow-ups, or "None"]
+**Outcome**: [Any decision or conclusion reached, or "Pending"]
 
 Email thread:
 ${truncated}
 
-Provide a structured summary with:
-1. **Topic**: One sentence describing the main subject
-2. **Key Points**: 2-4 bullet points of important information
-3. **Action Items**: Any tasks, deadlines, or follow-ups required
-4. **Decision Made**: Any conclusions or decisions reached (if applicable)
-
-Keep the total summary under 150 words. Be specific, not generic.`;
+Now write the summary (under 200 words, be specific not generic):`;
 
   const response = await client.chat.completions.create({
-    model: HF_MODEL,
-    messages: [{ role: 'user', content: prompt }],
-    max_tokens: 300,
+    model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    max_tokens: 400,
+    temperature: 0.3,
   });
 
-  return response.choices[0]?.message?.content || '';
+  const raw = response.choices[0]?.message?.content ?? '';
+  return cleanResponse(raw);
 }
 
 // ─────────────────────────────────────────────────────────────
-// Email Categorization (Llama 3 via Hugging Face)
+// Email Categorization
 // ─────────────────────────────────────────────────────────────
 
 export type EmailCategoryResult = {
@@ -117,51 +166,54 @@ export async function categorizeEmail(
   fromAddress: string,
   snippet: string
 ): Promise<EmailCategoryResult> {
-  const client = getHfClient();
+  const client = getClient();
+  const model = getModelId();
 
-  const prompt = `Categorize this email into exactly one category.
+  const systemPrompt = `You are an email classifier. Output ONLY valid JSON. No explanations, no reasoning, no thinking steps.`;
+
+  const userPrompt = `Classify this email into exactly ONE category.
 
 Categories:
-- Newsletter: Marketing emails, subscriptions, digests, announcements
-- Job: Job alerts, applications, recruiter messages, LinkedIn jobs
-- Finance: Bank statements, invoices, payments, receipts, transactions
-- Notification: System alerts, app notifications, account updates
-- Personal: Messages from real people, friends, family
-- Work: Business emails, team communication, project-related
-- Other: Anything that doesn't fit the above
+- Newsletter: Marketing, subscriptions, digests, blog posts, product updates
+- Job: Job alerts, applications, recruiters, LinkedIn jobs, career opportunities
+- Finance: Bank statements, invoices, payments, receipts, billing, transactions
+- Notification: System alerts, OTPs, app notifications, security alerts, account updates
+- Personal: Messages from real people (friends, family, colleagues writing personally)
+- Work: Business emails, team communication, meeting invites, project updates
+- Other: Anything not fitting above
 
-Email details:
+Email:
 From: ${fromAddress}
 Subject: ${subject}
-Preview: ${snippet?.slice(0, 300)}
+Preview: ${snippet?.slice(0, 400) ?? ''}
 
-Respond with valid JSON only:
-{
-  "category": "<one of the categories above>",
-  "confidence": <0.0 to 1.0>,
-  "reason": "<one sentence explaining why>"
-}`;
-
-  const response = await client.chat.completions.create({
-    model: HF_MODEL,
-    messages: [{ role: 'user', content: prompt }],
-    max_tokens: 150,
-  });
-
-  const text = response.choices[0]?.message?.content || '';
+Respond with JSON only in this exact format:
+{"category":"<one category>","confidence":<0.1-1.0>,"reason":"<one short sentence>"}`;
 
   try {
-    // Attempt to extract JSON from response
-    const match = text.match(/\{[\s\S]*\}/);
-    const jsonStr = match ? match[0] : text;
-    return JSON.parse(jsonStr) as EmailCategoryResult;
+    const response = await client.chat.completions.create({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      max_tokens: 120,
+      temperature: 0.1,
+    });
+
+    const raw = cleanResponse(response.choices[0]?.message?.content ?? '');
+
+    // Try to extract JSON even if the model added surrounding text
+    const match = raw.match(/\{[\s\S]*?\}/);
+    if (!match) throw new Error('No JSON in response');
+    return JSON.parse(match[0]) as EmailCategoryResult;
   } catch {
-    return { category: 'Other', confidence: 0.5, reason: 'Could not parse response' };
+    return { category: 'Other', confidence: 0.4, reason: 'Could not parse AI response' };
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Reply Drafting (Llama 3 via Hugging Face)
+// Reply Drafting
 // ─────────────────────────────────────────────────────────────
 
 export async function draftReply(
@@ -169,65 +221,71 @@ export async function draftReply(
   instruction: string,
   userEmail: string
 ): Promise<string> {
-  const client = getHfClient();
-
-  const prompt = `You are drafting an email reply for ${userEmail}.
-
-Original email thread (most recent last):
-${threadText.slice(0, 20_000)}
-
-User's instruction for reply: "${instruction}"
-
-Write a professional, concise email reply. 
-- Match the tone of the conversation
-- Do NOT include subject line or headers
-- Do NOT add "Subject:" or "From:" etc.
-- Just write the email body text
-- Sign off naturally based on context
-- Keep it under 200 words unless the instruction requires more`;
+  const client = getClient();
+  const model = getModelId();
 
   const response = await client.chat.completions.create({
-    model: HF_MODEL,
-    messages: [{ role: 'user', content: prompt }],
-    max_tokens: 400,
+    model,
+    messages: [
+      {
+        role: 'system',
+        content: `You are a professional email writer for ${userEmail}. Write ONLY the email body. No subject lines, no "From:", no reasoning. Just the email text, ready to send.`,
+      },
+      {
+        role: 'user',
+        content: `Write a reply to this email thread based on this instruction: "${instruction}"
+
+Original thread:
+${threadText.slice(0, 12_000)}
+
+Requirements:
+- Match the tone of the conversation
+- Keep it under 200 words
+- Sign off naturally
+- Do NOT include Subject:, From:, To: headers`,
+      },
+    ],
+    max_tokens: 500,
+    temperature: 0.4,
   });
 
-  return response.choices[0]?.message?.content || '';
+  return cleanResponse(response.choices[0]?.message?.content ?? '');
 }
 
 // ─────────────────────────────────────────────────────────────
-// Compose New Email from Natural Language Prompt (Feature 3)
+// Compose New Email
 // ─────────────────────────────────────────────────────────────
 export async function draftNewEmail(
   instruction: string,
   userEmail: string
 ): Promise<{ subject: string; draft: string }> {
-  const client = getHfClient();
+  const client = getClient();
+  const model = getModelId();
 
   const response = await client.chat.completions.create({
-    model: HF_MODEL,
+    model,
     messages: [
       {
         role: 'system',
-        content: `You are an expert email writer. Always respond with valid JSON only in this exact format:
-{"subject": "<concise subject line>", "draft": "<professional email body, no headers>"}`,
+        content: `You are an expert email writer. Output ONLY valid JSON in this exact format with no extra text:
+{"subject":"<concise subject line>","draft":"<professional email body, no headers>"}`,
       },
       {
         role: 'user',
-        content: `Write a professional email for: "${instruction}"\nSender: ${userEmail}\nKeep body under 200 words. Sign off naturally.`,
+        content: `Write a professional email for: "${instruction}"\nSender: ${userEmail}\nKeep body under 200 words.`,
       },
     ],
     max_tokens: 600,
     temperature: 0.4,
   });
 
-  const text = response.choices[0]?.message?.content ?? '';
+  const raw = cleanResponse(response.choices[0]?.message?.content ?? '');
   try {
-    const match = text.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(match ? match[0] : text);
-    return { subject: parsed.subject ?? '', draft: parsed.draft ?? text };
+    const match = raw.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(match ? match[0] : raw);
+    return { subject: parsed.subject ?? '', draft: parsed.draft ?? raw };
   } catch {
-    return { subject: '', draft: text };
+    return { subject: '', draft: raw };
   }
 }
 
@@ -251,7 +309,8 @@ export async function generateGroundedAnswer(
   retrievedThreads: RetrievedThread[],
   chatHistory: ChatMessage[]
 ): Promise<string> {
-  const client = getHfClient();
+  const client = getClient();
+  const model = getModelId();
 
   const contextBlocks = retrievedThreads
     .map(
@@ -276,27 +335,28 @@ IMPORTANT RULES:
 3. Always cite sources using [Source N] notation
 4. Be specific with dates, names, and amounts when available
 5. Do not hallucinate or make up information
+6. Output ONLY your final answer — no thinking, no reasoning steps
 
 ${chatHistory.length > 0 ? `Previous conversation:\n${historyText}\n\n` : ''}
 
-Email context retrieved for this query:
+Email context:
 ${contextBlocks || 'No relevant emails found.'}
 
 User's question: ${query}
 
-Answer the question based strictly on the email context above, citing sources:`;
+Answer:`;
 
   const response = await client.chat.completions.create({
-    model: HF_MODEL,
+    model,
     messages: [{ role: 'user', content: prompt }],
     max_tokens: 500,
   });
 
-  return response.choices[0]?.message?.content || '';
+  return cleanResponse(response.choices[0]?.message?.content ?? '');
 }
 
 // ─────────────────────────────────────────────────────────────
-// Streaming Chat (returns generator)
+// Streaming Chat
 // ─────────────────────────────────────────────────────────────
 
 export async function* generateGroundedAnswerStream(
@@ -305,7 +365,9 @@ export async function* generateGroundedAnswerStream(
   chatHistory: ChatMessage[],
   inboxMeta?: { totalThreads: number; totalMessages: number }
 ): AsyncGenerator<string> {
-  const client = getHfClient();
+  const client = getClient();
+  const model = getModelId();
+  const provider = getProvider();
 
   // Detect newsletter / news digest queries → trigger deduplication instruction
   const isNewsletterQuery = /newsletter|news digest|tech news|what('s| is) new|recent news|top stories|headlines/i.test(query);
@@ -319,7 +381,7 @@ export async function* generateGroundedAnswerStream(
             hour: '2-digit', minute: '2-digit',
           })
         : 'unknown date';
-      const content = t.content?.trim() || t.summary || 'No content available';
+      const content = (t as any).content?.trim() || t.summary || 'No content available';
       return (
         `[Source ${i + 1}]\n` +
         `Subject: ${t.subject ?? 'No Subject'}\n` +
@@ -343,9 +405,10 @@ export async function* generateGroundedAnswerStream(
   let systemPrompt: string;
 
   if (retrievedThreads.length === 0) {
-    systemPrompt = `You are a Gmail AI assistant. No emails have been indexed yet. Tell the user to sync their Gmail using the Sync button.`;
+    systemPrompt = `You are a Gmail AI assistant. No emails have been indexed yet. Tell the user to sync their Gmail using the Sync button. Output ONLY your response, no thinking steps.`;
   } else if (isNewsletterQuery) {
     systemPrompt = `You are an intelligent Gmail assistant specializing in newsletter digest and deduplication.
+Output ONLY your final answer. No reasoning, no thinking steps, no <think> tags.
 
 ${inboxStats}
 
@@ -363,6 +426,7 @@ ${contextBlocks}
 ━━━`;
   } else {
     systemPrompt = `You are an intelligent Gmail assistant. Answer questions using the email context below.
+Output ONLY your final answer. No reasoning, no thinking steps, no <think> tags.
 
 ${inboxStats}
 
@@ -373,7 +437,7 @@ STRICT RULES:
 - The context shows the ${retrievedThreads.length} most relevant emails for this query
 - Be specific with dates, names, senders, and dollar amounts
 - For "most recent"/"latest" → sort by Date field and list in order
-- For cross-email reasoning (e.g. "all emails about project X") → synthesize ALL matching sources
+- For cross-email reasoning → synthesize ALL matching sources
 - If info isn't in the context, say exactly: "I don't see that in your synced emails"
 - NEVER hallucinate — only state facts from the context below
 
@@ -386,17 +450,56 @@ ${contextBlocks}
   messages.unshift({ role: 'system', content: systemPrompt });
   messages.push({ role: 'user', content: query });
 
+  // DeepSeek-R1 models do NOT support streaming well via HF — use non-streaming for HF
+  if (provider === 'huggingface') {
+    const response = await client.chat.completions.create({
+      model,
+      messages,
+      stream: false,
+      max_tokens: 1500,
+      temperature: 0.3,
+    });
+    const text = cleanResponse(response.choices[0]?.message?.content ?? '');
+    // Yield in chunks to simulate streaming so UI works the same
+    const words = text.split(' ');
+    for (const word of words) {
+      yield word + ' ';
+    }
+    return;
+  }
+
+  // Gemini and NVIDIA NIM support streaming natively
   const stream = await client.chat.completions.create({
-    model: HF_MODEL,
+    model,
     messages,
     stream: true,
     max_tokens: 1500,
     temperature: 0.2,
   });
 
+  let thinkBuffer = '';
+  let inThinkTag = false;
+
   for await (const chunk of stream) {
     const content = chunk.choices[0]?.delta?.content;
-    if (content) yield content;
+    if (!content) continue;
+
+    // Strip DeepSeek <think>...</think> tags from streaming output
+    thinkBuffer += content;
+    if (thinkBuffer.includes('<think>')) inThinkTag = true;
+    if (inThinkTag) {
+      if (thinkBuffer.includes('</think>')) {
+        inThinkTag = false;
+        const after = thinkBuffer.split('</think>').pop() ?? '';
+        thinkBuffer = '';
+        if (after) yield after;
+      }
+      // Skip while inside think tag
+      continue;
+    }
+
+    // Not in think tag — yield directly
+    yield content;
+    thinkBuffer = '';
   }
 }
-
