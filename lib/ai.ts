@@ -45,7 +45,13 @@ function getModelId(): string {
     }
     return hfModel;
   }
-  return process.env.HF_MODEL ?? 'meta/llama-3.1-8b-instruct';
+  // NVIDIA NIM fallback
+  let nimModel = process.env.NVIDIA_NIM_MODEL ?? 'meta/llama-3.3-70b-instruct';
+  // If user accidentally pasted the HF model string into the NIM variable, correct it
+  if (nimModel.toLowerCase().includes('llama-3.3-70b')) {
+    nimModel = 'meta/llama-3.3-70b-instruct';
+  }
+  return nimModel;
 }
 
 let _client: OpenAI | null = null;
