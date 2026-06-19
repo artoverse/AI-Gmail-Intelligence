@@ -266,23 +266,7 @@ async function upsertMessage(
   const ccAddresses = ccStr ? ccStr.split(',').map((s) => s.trim()).filter(Boolean) : [];
   const date = dateStr ? new Date(dateStr).toISOString() : new Date().toISOString();
 
-  // Upsert message FIRST — so we have it saved regardless of thread upsert
-  const { error: msgError } = await supabaseAdmin.from('email_messages').upsert({
-    id: messageId,
-    thread_id: threadId,
-    from_address: fromAddr,
-    to_addresses: toAddresses,
-    cc_addresses: ccAddresses,
-    date,
-    subject,
-    body_text: bodyText.slice(0, 50_000),
-    body_html: bodyHtml.slice(0, 100_000),
-    labels: msg.labelIds ?? [],
-    raw: { id: msg.id, threadId: msg.threadId, snippet: msg.snippet },
-  }, { onConflict: 'id' });
-  if (msgError) console.error('Message upsert error:', msgError.message, 'for message', messageId);
-
-  // Upsert thread after message — ensure participants and date are up to date
+  // THREAD MUST be upserted FIRST — email_messages.thread_id has a FK to email_threads.id
   const participants = [
     ...toAddresses.map((e) => ({ email: e })),
     { email: fromAddr },
@@ -299,7 +283,26 @@ async function upsertMessage(
     onConflict: 'id',
     ignoreDuplicates: false,
   });
-  if (threadError) console.error('Thread upsert error:', threadError.message, 'for thread', threadId);
+  if (threadError) {
+    console.error('Thread upsert error:', threadError.message, 'for thread', threadId);
+    return; // Don't try to insert message if thread failed — FK will reject it
+  }
+
+  // Now upsert message (thread exists, FK is satisfied)
+  const { error: msgError } = await supabaseAdmin.from('email_messages').upsert({
+    id: messageId,
+    thread_id: threadId,
+    from_address: fromAddr,
+    to_addresses: toAddresses,
+    cc_addresses: ccAddresses,
+    date,
+    subject,
+    body_text: bodyText.slice(0, 50_000),
+    body_html: bodyHtml.slice(0, 100_000),
+    labels: msg.labelIds ?? [],
+    raw: { id: msg.id, threadId: msg.threadId, snippet: msg.snippet },
+  }, { onConflict: 'id' });
+  if (msgError) console.error('Message upsert error:', msgError.message, 'for message', messageId);
 }
 
 // ─────────────────────────────────────────────────────────────

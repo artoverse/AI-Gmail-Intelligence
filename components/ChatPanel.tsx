@@ -184,13 +184,14 @@ export default function ChatPanel({ gmailAccountId, onSelectThread, onToggle }: 
             // Handle server-side errors sent as SSE events
             if (parsed.error) {
               const errMsg = parsed.error as string;
-              let userMsg = 'Something went wrong. Please try again.';
+              // Show the actual error so user (and developer) can diagnose
+              let userMsg = errMsg;
               if (errMsg.includes('404') || errMsg.includes('not found')) {
-                userMsg = 'AI model unavailable. Please check your Gemini API key in .env.local.';
-              } else if (errMsg.includes('API key') || errMsg.includes('PERMISSION_DENIED') || errMsg.includes('INVALID_ARGUMENT')) {
-                userMsg = 'Invalid Gemini API key. Get a valid key from aistudio.google.com (should start with AIza...).';
-              } else if (errMsg.includes('quota') || errMsg.includes('RESOURCE_EXHAUSTED')) {
-                userMsg = 'Gemini quota exceeded. Please wait a moment and try again.';
+                userMsg = 'AI model not found. Check model name in environment variables. Details: ' + errMsg;
+              } else if (errMsg.includes('API key') || errMsg.includes('PERMISSION_DENIED') || errMsg.includes('INVALID_ARGUMENT') || errMsg.includes('401')) {
+                userMsg = 'Invalid API key — check your environment variables on Render. Details: ' + errMsg;
+              } else if (errMsg.includes('quota') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('429')) {
+                userMsg = 'AI quota exceeded. Please wait a moment and try again.';
               }
               setMessages((prev) =>
                 prev.map((m) =>

@@ -1,37 +1,59 @@
 import OpenAI from 'openai';
 
 // ─────────────────────────────────────────────────────────────
-// Provider detection — Gemini preferred, then HF, then NVIDIA NIM
+// Provider detection — explicit AI_PROVIDER env var, or auto-detect
+// Priority: AI_PROVIDER > NVIDIA_NIM_API_KEY > HF_TOKEN > GEMINI_API_KEY
 // ─────────────────────────────────────────────────────────────
 
 type Provider = 'gemini' | 'huggingface' | 'nvidia';
 
+function isValidKey(key: string | undefined): boolean {
+  if (!key) return false;
+  const k = key.trim();
+  // Reject empty, placeholder, or "your_xxx_here" values
+  return k.length > 10 && !k.includes('your_') && !k.includes('xxx') && !k.includes('_here');
+}
+
 function getProvider(): Provider {
-  if (process.env.GEMINI_API_KEY) return 'gemini';
-  if (process.env.HF_TOKEN) return 'huggingface';
+  // Explicit override via env var
+  const explicit = process.env.AI_PROVIDER?.toLowerCase();
+  if (explicit === 'gemini' && isValidKey(process.env.GEMINI_API_KEY)) return 'gemini';
+  if (explicit === 'huggingface' && isValidKey(process.env.HF_TOKEN)) return 'huggingface';
+  if (explicit === 'nvidia' && isValidKey(process.env.NVIDIA_NIM_API_KEY)) return 'nvidia';
+
+  // Auto-detect: prefer NVIDIA NIM (most reliable for this app), then HF, then Gemini
+  if (isValidKey(process.env.NVIDIA_NIM_API_KEY)) return 'nvidia';
+  if (isValidKey(process.env.HF_TOKEN)) return 'huggingface';
+  if (isValidKey(process.env.GEMINI_API_KEY)) return 'gemini';
+
+  // Fallback — will likely error, but at least tries
   return 'nvidia';
 }
 
 function getModelId(): string {
   const provider = getProvider();
   if (provider === 'gemini') {
-    return process.env.GEMINI_MODEL ?? 'gemini-1.5-flash';
+    return process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
   }
   if (provider === 'huggingface') {
     const hfModel = process.env.HF_MODEL ?? 'meta-llama/Llama-3.3-70B-Instruct';
-    // Remap large models that don't work on HF free serverless tier
+    // Remap models too large for HF free tier
     if (hfModel.includes('DeepSeek-R1') && !hfModel.includes('Distill')) {
+      return 'meta-llama/Llama-3.3-70B-Instruct';
+    }
+    if (hfModel.includes('405B') || hfModel.includes('405b')) {
       return 'meta-llama/Llama-3.3-70B-Instruct';
     }
     return hfModel;
   }
-  return process.env.NVIDIA_NIM_MODEL ?? 'meta/llama-3.1-405b-instruct';
+  return process.env.HF_MODEL ?? 'meta/llama-3.1-8b-instruct';
 }
 
 let _client: OpenAI | null = null;
 function getClient(): OpenAI {
   if (!_client) {
     const provider = getProvider();
+    console.log(`[AI] Using provider: ${provider}, model: ${getModelId()}`);
     if (provider === 'gemini') {
       _client = new OpenAI({
         apiKey: process.env.GEMINI_API_KEY!,
