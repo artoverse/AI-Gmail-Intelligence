@@ -7,9 +7,12 @@ import OpenAI from 'openai';
 let _hfClient: OpenAI | null = null;
 function getHfClient() {
   if (!_hfClient) {
+    const isHf = !!process.env.HF_TOKEN;
     _hfClient = new OpenAI({
-      apiKey: process.env.NVIDIA_NIM_API_KEY!,
-      baseURL: process.env.NVIDIA_NIM_API_BASE ?? 'https://integrate.api.nvidia.com/v1',
+      apiKey: isHf ? process.env.HF_TOKEN! : process.env.NVIDIA_NIM_API_KEY!,
+      baseURL: isHf 
+        ? 'https://api-inference.huggingface.co/v1/' 
+        : (process.env.NVIDIA_NIM_API_BASE ?? 'https://integrate.api.nvidia.com/v1'),
     });
   }
   return _hfClient;
