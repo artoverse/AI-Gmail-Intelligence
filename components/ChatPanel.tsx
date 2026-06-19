@@ -366,7 +366,7 @@ export default function ChatPanel({ gmailAccountId, onSelectThread, onToggle }: 
             )}
           </button>
         </div>
-        <p className="chat-hint">Powered by Llama 3 · NVIDIA NIM RAG · Press Enter to send</p>
+        <p className="chat-hint">Powered by DeepSeek-R1 · NVIDIA NIM RAG · Press Enter to send</p>
       </div>
     </div>
   );

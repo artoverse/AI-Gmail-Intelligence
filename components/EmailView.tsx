@@ -190,7 +190,7 @@ export default function EmailView({ thread, userId, userEmail }: EmailViewProps)
           <div className="summary-header">
             <Sparkles size={14} className="text-violet-400" />
             <span>AI Summary</span>
-            <span className="summary-badge">Llama 3</span>
+            <span className="summary-badge">DeepSeek-R1</span>
           </div>
           <div className="summary-content">
             {summary.split('\n').map((line, i) => {
