@@ -209,6 +209,11 @@ export default function EmailView({ thread, userId, userEmail }: EmailViewProps)
               const trimmed = line.trim();
               if (!trimmed) return null;
 
+              // Robust UI-level filtering to guarantee empty fields are hidden
+              const lowerLine = trimmed.toLowerCase();
+              if (lowerLine.includes('action items:') && (lowerLine.includes('none') || lowerLine.includes('n/a') || lowerLine.trim().endsWith(':'))) return null;
+              if (lowerLine.includes('outcome:') && (lowerLine.includes('pending') || lowerLine.includes('none') || lowerLine.includes('n/a') || lowerLine.trim().endsWith(':'))) return null;
+
               // Render inline bold (**text**) within any line
               function renderInline(text: string) {
                 const parts = text.split(/(\*\*[^*]+\*\*)/g);
