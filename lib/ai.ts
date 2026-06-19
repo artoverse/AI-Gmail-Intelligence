@@ -15,7 +15,7 @@ function getHfClient() {
   return _hfClient;
 }
 
-const HF_MODEL = 'meta/llama-3.1-8b-instruct';
+const HF_MODEL = process.env.HF_MODEL ?? 'meta/llama-3.1-8b-instruct';
 const EMBED_MODEL = process.env.NVIDIA_NIM_EMBED_MODEL ?? 'nvidia/nv-embedqa-e5-v5';
 const NIM_BASE = process.env.NVIDIA_NIM_API_BASE ?? 'https://integrate.api.nvidia.com/v1';
 
