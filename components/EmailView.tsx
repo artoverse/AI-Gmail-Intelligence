@@ -33,6 +33,7 @@ export default function EmailView({ thread, userId, userEmail }: EmailViewProps)
   const [messages, setMessages] = useState<EmailMessage[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
   const [isSummarizing, setIsSummarizing] = useState(false);
+  const [summarizeError, setSummarizeError] = useState<string | null>(null);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
   const [category, setCategory] = useState<string | null>(null);
   const [showCompose, setShowCompose] = useState(false);
@@ -43,17 +44,16 @@ export default function EmailView({ thread, userId, userEmail }: EmailViewProps)
     setMessages([]);
     setSummary(thread.summary ?? null);
     setCategory(null);
+    setSummarizeError(null);
     setLoading(true);
 
     const load = async () => {
       try {
-        // Use server-side API to bypass RLS issues
         const res = await fetch(`/api/summarize?threadId=${thread.id}`);
         const data = await res.json();
 
         if (data.messages) {
           setMessages(data.messages);
-          // Auto-expand last message
           if (data.messages.length > 0) {
             const lastId = data.messages[data.messages.length - 1].id;
             setExpandedMessages(new Set([lastId]));
@@ -76,16 +76,21 @@ export default function EmailView({ thread, userId, userEmail }: EmailViewProps)
   const handleSummarize = async () => {
     if (!thread) return;
     setIsSummarizing(true);
+    setSummarizeError(null);
     try {
       const res = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Pass force: true so we skip the cache if we are re-summarizing
         body: JSON.stringify({ threadId: thread.id, action: 'summarize', force: true }),
       });
       const data = await res.json();
-      if (data.summary) setSummary(data.summary);
+      if (data.summary) {
+        setSummary(data.summary);
+      } else if (data.error) {
+        setSummarizeError(`AI error: ${data.details || data.error}`);
+      }
     } catch (err) {
+      setSummarizeError('Network error — check connection and try again.');
       console.error('Summarize failed:', err);
     } finally {
       setIsSummarizing(false);
@@ -184,6 +189,13 @@ export default function EmailView({ thread, userId, userEmail }: EmailViewProps)
         </div>
       </div>
 
+      {/* Summarize Error */}
+      {summarizeError && (
+        <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '8px 14px', margin: '0 20px', fontSize: 12, color: '#f87171' }}>
+          ⚠️ {summarizeError}
+        </div>
+      )}
+
       {/* AI Summary Panel */}
       {summary && (
         <div className="summary-panel" id="summary-panel">
@@ -194,14 +206,26 @@ export default function EmailView({ thread, userId, userEmail }: EmailViewProps)
           </div>
           <div className="summary-content">
             {summary.split('\n').map((line, i) => {
-              if (line.startsWith('**') && line.endsWith('**')) {
-                return <p key={i} className="summary-heading">{line.replace(/\*\*/g, '')}</p>;
+              const trimmed = line.trim();
+              if (!trimmed) return null;
+
+              // Render inline bold (**text**) within any line
+              function renderInline(text: string) {
+                const parts = text.split(/(\*\*[^*]+\*\*)/g);
+                return parts.map((part, j) =>
+                  part.startsWith('**') && part.endsWith('**')
+                    ? <strong key={j} style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{part.slice(2, -2)}</strong>
+                    : <span key={j}>{part}</span>
+                );
               }
-              if (line.startsWith('- ') || line.startsWith('• ')) {
-                return <p key={i} className="summary-bullet">• {line.slice(2)}</p>;
+
+              if (trimmed.startsWith('- ') || trimmed.startsWith('• ')) {
+                return <p key={i} className="summary-bullet">• {renderInline(trimmed.slice(2))}</p>;
               }
-              if (line.trim()) return <p key={i} className="summary-text">{line}</p>;
-              return null;
+              if (trimmed.match(/^\d+\.\s/)) {
+                return <p key={i} className="summary-bullet">{renderInline(trimmed)}</p>;
+              }
+              return <p key={i} className="summary-text">{renderInline(trimmed)}</p>;
             })}
           </div>
         </div>

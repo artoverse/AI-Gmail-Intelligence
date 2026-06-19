@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Send, Sparkles, Bot, User, ExternalLink, Loader2, X, MessageSquare } from 'lucide-react';
 
 type Source = {
@@ -30,6 +30,78 @@ const SUGGESTED_QUERIES = [
   'Any newsletters about AI?',
   'Who emailed me about meetings?',
 ];
+
+// Renders a line of markdown with inline bold/italic support
+function renderInline(text: string, key: string | number): React.ReactNode {
+  // Split on **bold** and *italic* patterns
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g);
+  return (
+    <span key={key}>
+      {parts.map((part, i) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+          return <strong key={i}>{part.slice(2, -2)}</strong>;
+        }
+        if (part.startsWith('*') && part.endsWith('*') && part.length > 2) {
+          return <em key={i}>{part.slice(1, -1)}</em>;
+        }
+        return part;
+      })}
+    </span>
+  );
+}
+
+function renderMarkdown(text: string): React.ReactNode[] {
+  const lines = text.split('\n');
+  const nodes: React.ReactNode[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      nodes.push(<div key={i} style={{ height: 6 }} />);
+      i++;
+      continue;
+    }
+
+    // H1/H2/H3 headers
+    if (trimmed.startsWith('### ')) {
+      nodes.push(<p key={i} className="chat-bold" style={{ fontSize: 13 }}>{renderInline(trimmed.slice(4), 0)}</p>);
+      i++; continue;
+    }
+    if (trimmed.startsWith('## ') || trimmed.startsWith('# ')) {
+      const text = trimmed.replace(/^#{1,2}\s/, '');
+      nodes.push(<p key={i} className="chat-bold">{renderInline(text, 0)}</p>);
+      i++; continue;
+    }
+
+    // Numbered list: "1. text", "2. text"
+    const numMatch = trimmed.match(/^(\d+)\.\s+(.+)/);
+    if (numMatch) {
+      nodes.push(
+        <p key={i} className="chat-bullet" style={{ paddingLeft: 4 }}>
+          <span style={{ color: 'var(--text-muted)', marginRight: 6, minWidth: 18, display: 'inline-block' }}>{numMatch[1]}.</span>
+          {renderInline(numMatch[2], 0)}
+        </p>
+      );
+      i++; continue;
+    }
+
+    // Bullet list
+    if (trimmed.startsWith('- ') || trimmed.startsWith('• ') || trimmed.startsWith('* ')) {
+      const content = trimmed.slice(2);
+      nodes.push(<p key={i} className="chat-bullet">• {renderInline(content, 0)}</p>);
+      i++; continue;
+    }
+
+    // Plain line with potential inline markdown
+    nodes.push(<p key={i}>{renderInline(trimmed, 0)}</p>);
+    i++;
+  }
+
+  return nodes;
+}
 
 export default function ChatPanel({ gmailAccountId, onSelectThread, onToggle }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -271,20 +343,7 @@ export default function ChatPanel({ gmailAccountId, onSelectThread, onToggle }: 
                   <div className={`chat-bubble ${msg.role === 'user' ? 'bubble-user' : 'bubble-assistant'}`}>
                     {msg.content ? (
                       <div className="chat-content">
-                        {msg.content.split('\n').map((line, i) => {
-                          if (line.startsWith('**') || line.startsWith('##')) {
-                            return (
-                              <p key={i} className="chat-bold">
-                                {line.replace(/\*\*/g, '').replace(/##\s?/, '')}
-                              </p>
-                            );
-                          }
-                          if (line.startsWith('- ') || line.startsWith('• ')) {
-                            return <p key={i} className="chat-bullet">• {line.slice(2)}</p>;
-                          }
-                          if (line.trim()) return <p key={i}>{line}</p>;
-                          return <br key={i} />;
-                        })}
+                        {renderMarkdown(msg.content)}
                       </div>
                     ) : msg.isStreaming ? (
                       <div className="typing-indicator">

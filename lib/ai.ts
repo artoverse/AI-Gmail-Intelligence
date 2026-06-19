@@ -18,17 +18,14 @@ function getModelId(): string {
     return process.env.GEMINI_MODEL ?? 'gemini-1.5-flash';
   }
   if (provider === 'huggingface') {
-    // For HF, use a distilled version of DeepSeek that works on free tier
-    // DeepSeek-R1 (full) is 671B — too large for HF serverless
-    // DeepSeek-R1-Distill-Llama-8B is fully supported on HF Inference API
-    const hfModel = process.env.HF_MODEL ?? 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B';
-    // If user set the huge R1 model, gracefully remap to distilled 8B
-    if (hfModel === 'deepseek-ai/DeepSeek-R1') {
-      return 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B';
+    const hfModel = process.env.HF_MODEL ?? 'meta-llama/Llama-3.3-70B-Instruct';
+    // Remap large models that don't work on HF free serverless tier
+    if (hfModel.includes('DeepSeek-R1') && !hfModel.includes('Distill')) {
+      return 'meta-llama/Llama-3.3-70B-Instruct';
     }
     return hfModel;
   }
-  return process.env.NVIDIA_NIM_MODEL ?? 'meta/llama-3.1-8b-instruct';
+  return process.env.NVIDIA_NIM_MODEL ?? 'meta/llama-3.1-405b-instruct';
 }
 
 let _client: OpenAI | null = null;
@@ -116,35 +113,38 @@ export async function embedPassage(text: string): Promise<number[]> {
 export async function summarizeThread(threadText: string): Promise<string> {
   const client = getClient();
   const model = getModelId();
-  // Truncate to keep well within context limits
   const truncated = threadText.slice(0, 12_000);
-
-  const systemPrompt = `You are a professional email analyst. Your job is to produce concise, accurate email summaries.
-CRITICAL: Output ONLY the summary. Do NOT include any reasoning, thinking steps, or meta-commentary.`;
-
-  const userPrompt = `Summarize this email thread in the following structured format:
-
-**Topic**: [One sentence describing the main subject]
-**Key Points**:
-• [Point 1]
-• [Point 2]
-• [Point 3 if applicable]
-**Action Items**: [List any tasks or follow-ups, or "None"]
-**Outcome**: [Any decision or conclusion reached, or "Pending"]
-
-Email thread:
-${truncated}
-
-Now write the summary (under 200 words, be specific not generic):`;
 
   const response = await client.chat.completions.create({
     model,
     messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
+      {
+        role: 'system',
+        content: 'You are an expert email analyst. Output ONLY the summary — no preamble, no meta-commentary, no thinking steps.',
+      },
+      {
+        role: 'user',
+        content: `Summarize this email thread using this exact format:
+
+**Topic**: [One sentence]
+
+**Key Points**:
+• [Point 1]
+• [Point 2]
+• [Point 3 if relevant]
+
+**Action Items**: [Specific tasks/deadlines, or "None"]
+
+**Outcome**: [Decision made or "Pending"]
+
+Email thread:
+${truncated}
+
+Write the summary now (max 200 words):`,
+      },
     ],
     max_tokens: 400,
-    temperature: 0.3,
+    temperature: 0.2,
   });
 
   const raw = response.choices[0]?.message?.content ?? '';

@@ -140,7 +140,7 @@ export async function syncGmailFull(
   let pageToken: string | undefined;
   let synced = 0;
   let lastHistoryId: string | null = null;
-  const MAX_PAGES = 2; // max 100 messages per sync to avoid Render 30s timeout
+  const MAX_PAGES = 10; // up to 500 messages per full sync
   let pagesFetched = 0;
 
   do {
@@ -266,7 +266,23 @@ async function upsertMessage(
   const ccAddresses = ccStr ? ccStr.split(',').map((s) => s.trim()).filter(Boolean) : [];
   const date = dateStr ? new Date(dateStr).toISOString() : new Date().toISOString();
 
-  // Upsert thread first (satisfies foreign key constraint for messages)
+  // Upsert message FIRST — so we have it saved regardless of thread upsert
+  const { error: msgError } = await supabaseAdmin.from('email_messages').upsert({
+    id: messageId,
+    thread_id: threadId,
+    from_address: fromAddr,
+    to_addresses: toAddresses,
+    cc_addresses: ccAddresses,
+    date,
+    subject,
+    body_text: bodyText.slice(0, 50_000),
+    body_html: bodyHtml.slice(0, 100_000),
+    labels: msg.labelIds ?? [],
+    raw: { id: msg.id, threadId: msg.threadId, snippet: msg.snippet },
+  }, { onConflict: 'id' });
+  if (msgError) console.error('Message upsert error:', msgError.message, 'for message', messageId);
+
+  // Upsert thread after message — ensure participants and date are up to date
   const participants = [
     ...toAddresses.map((e) => ({ email: e })),
     { email: fromAddr },
@@ -283,23 +299,7 @@ async function upsertMessage(
     onConflict: 'id',
     ignoreDuplicates: false,
   });
-  if (threadError) console.error('Thread upsert error:', threadError);
-
-  // Upsert message second
-  const { error: msgError } = await supabaseAdmin.from('email_messages').upsert({
-    id: messageId,
-    thread_id: threadId,
-    from_address: fromAddr,
-    to_addresses: toAddresses,
-    cc_addresses: ccAddresses,
-    date,
-    subject,
-    body_text: bodyText.slice(0, 50_000), // cap at 50KB
-    body_html: bodyHtml.slice(0, 100_000),
-    labels: msg.labelIds ?? [],
-    raw: { id: msg.id, threadId: msg.threadId, snippet: msg.snippet },
-  }, { onConflict: 'id' });
-  if (msgError) console.error('Message upsert error:', msgError);
+  if (threadError) console.error('Thread upsert error:', threadError.message, 'for thread', threadId);
 }
 
 // ─────────────────────────────────────────────────────────────
