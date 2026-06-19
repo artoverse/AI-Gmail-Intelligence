@@ -211,8 +211,8 @@ export default function EmailView({ thread, userId, userEmail }: EmailViewProps)
 
               // Robust UI-level filtering to guarantee empty fields are hidden
               const lowerLine = trimmed.toLowerCase();
-              if (lowerLine.includes('action items:') && (lowerLine.includes('none') || lowerLine.includes('n/a') || lowerLine.trim().endsWith(':'))) return null;
-              if (lowerLine.includes('outcome:') && (lowerLine.includes('pending') || lowerLine.includes('none') || lowerLine.includes('n/a') || lowerLine.trim().endsWith(':'))) return null;
+              if (lowerLine.includes('action items') && (lowerLine.includes('none') || lowerLine.includes('n/a') || lowerLine.trim().endsWith(':') || lowerLine.includes('no action'))) return null;
+              if (lowerLine.includes('outcome') && (lowerLine.includes('pending') || lowerLine.includes('none') || lowerLine.includes('n/a') || lowerLine.trim().endsWith(':') || lowerLine.includes('no decision'))) return null;
 
               // Render inline bold (**text**) within any line
               function renderInline(text: string) {
