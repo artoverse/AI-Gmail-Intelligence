@@ -60,9 +60,10 @@ function getClient(): OpenAI {
         baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
       });
     } else if (provider === 'huggingface') {
+      const model = getModelId();
       _client = new OpenAI({
         apiKey: process.env.HF_TOKEN!,
-        baseURL: 'https://api-inference.huggingface.co/v1/',
+        baseURL: `https://api-inference.huggingface.co/models/${model}/v1/`,
       });
     } else {
       _client = new OpenAI({
