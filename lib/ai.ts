@@ -467,6 +467,7 @@ STRICT RULES:
 - For cross-email reasoning → synthesize ALL matching sources
 - If the user sends a casual greeting or conversational message (like "hi" or "thanks"), reply naturally and politely.
 - If the user asks a factual question about their emails and the info isn't in the context, say you don't see it in the synced emails.
+- Be concise and direct in your answers. Avoid unnecessary filler text to ensure a faster response.
 - NEVER hallucinate facts about emails — only state facts from the context below
 
 Email context (${retrievedThreads.length} most relevant emails):
